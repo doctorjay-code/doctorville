@@ -322,6 +322,56 @@ function processTransaction(row) {
   };
 }
 
+// Activity Category Rank for Chronological Newest-First Intra-day Sorting
+function getActivityRank(row) {
+  const desc = row.description || '';
+  const pts = row.points || 0;
+  // 1. Coupon purchases / Market (BilMarket):
+  if (pts < 0 || desc.includes('결제') || desc.includes('비즈마켓') || desc.includes('쿠폰') || desc.includes('포인트샵')) {
+    return 40;
+  }
+  // 2. Seminars / Surveys (usually completed afternoon/evening):
+  if (desc.includes('설문') || desc.includes('세미나')) {
+    return 30;
+  }
+  // 3. Daily Quiz (morning):
+  if (desc.includes('퀴즈')) {
+    return 20;
+  }
+  // 4. Attendance (morning earliest):
+  if (desc.includes('출석')) {
+    return 10;
+  }
+  // 5. Other
+  return 5;
+}
+
+// 1:1 Pairing & Chronological Newest-First (Top is Newest) Sorter
+function sortAndPairTransactions(rows) {
+  return rows.sort((a, b) => {
+    // 1. trans_date DESC (newest date first)
+    if (a.trans_date !== b.trans_date) {
+      return b.trans_date.localeCompare(a.trans_date);
+    }
+    // 2. Activity Category DESC (Seminars/Market -> Quiz -> Attendance)
+    const rankDiff = getActivityRank(b) - getActivityRank(a);
+    if (rankDiff !== 0) return rankDiff;
+
+    // 3. day_seq DESC (6 -> 5 -> 4 -> 3 -> 2 -> 1 for multiple daily seminars)
+    const seqDiff = (b.day_seq || 1) - (a.day_seq || 1);
+    if (seqDiff !== 0) return seqDiff;
+
+    // 4. Match exact same description (e.g. specific seminar name)
+    const descDiff = (b.description || '').localeCompare(a.description || '', 'ko');
+    if (descDiff !== 0) return descDiff;
+
+    // 5. Account pairing: 박범준 first, then 박주하
+    const aOrder = a.account_name === '박범준' ? 0 : 1;
+    const bOrder = b.account_name === '박범준' ? 0 : 1;
+    return aOrder - bOrder;
+  });
+}
+
 let loadTransactionsPromise = null;
 
 // Fetch all transactions from Supabase REST API (Parallel + Stale-While-Revalidate Cache)
@@ -336,11 +386,11 @@ export function loadTransactions(force = false) {
     let hasCache = false;
     if (!force) {
       try {
-        const rawCache = localStorage.getItem('dva_cached_transactions');
+        const rawCache = localStorage.getItem('dva_cached_transactions_v3');
         if (rawCache) {
           const cachedRows = JSON.parse(rawCache);
           if (Array.isArray(cachedRows) && cachedRows.length > 0) {
-            state.transactions = cachedRows.map(processTransaction);
+            state.transactions = sortAndPairTransactions(cachedRows.map(processTransaction));
             populateMonthDropdown();
             renderApp();
             hasCache = true;
@@ -353,7 +403,7 @@ export function loadTransactions(force = false) {
 
     // 2. High-speed Parallel Fetch via Promise.all (0.3초대 백그라운드 프리패칭)
     try {
-      const url = `${SUPABASE_URL}/rest/v1/dva_point_transactions?select=trans_date,account_name,category,service_type,description,points,expire_date,tx_hash&order=trans_date.desc,account_name.asc,day_seq.asc,tx_hash.asc`;
+      const url = `${SUPABASE_URL}/rest/v1/dva_point_transactions?select=id,trans_date,account_name,category,service_type,description,points,expire_date,day_seq,tx_hash&order=trans_date.desc`;
       const batchRanges = ['0-999', '1000-1999', '2000-2999', '3000-3999'];
 
       const responses = await Promise.all(batchRanges.map(range => 
@@ -399,15 +449,18 @@ export function loadTransactions(force = false) {
         }
       }
 
+      // 1:1 Pairing & Chronological Newest-First Sort
+      const pairedRows = sortAndPairTransactions(dedupedRows.map(processTransaction));
+
       // Update state & Local Storage Cache
-      state.transactions = dedupedRows.map(processTransaction);
+      state.transactions = pairedRows;
       try {
-        localStorage.setItem('dva_cached_transactions', JSON.stringify(dedupedRows));
+        localStorage.setItem('dva_cached_transactions_v3', JSON.stringify(dedupedRows));
       } catch (e) {
         // quota safeguard
       }
 
-      console.log(`Loaded ${state.transactions.length} point transactions in parallel`);
+      console.log(`Loaded ${state.transactions.length} point transactions in parallel (1:1 paired, top newest)`);
       populateMonthDropdown();
       renderApp();
     } catch (error) {
