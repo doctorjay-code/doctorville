@@ -214,9 +214,9 @@ const CATEGORY_MAP = {
   deep_4000: { label: "🎯 4,000P 심화", color: "bg-amber-100 text-amber-800" },
   deep_3000: { label: "🎯 3,000P 심화", color: "bg-amber-100 text-amber-900 border border-amber-200" },
   deep_2000: { label: "🎯 2,000P 심화", color: "bg-amber-50 text-amber-700" },
-  market_baemin: { label: "🛵 배달의민족 상품권", color: "bg-emerald-100 text-emerald-800" },
-  market_kakao: { label: "💛 카카오페이 포인트", color: "bg-yellow-100 text-yellow-800" },
-  market_naver: { label: "💚 네이버페이 포인트", color: "bg-green-100 text-green-800" },
+  market_baemin: { label: "🛵 배달의민족", color: "bg-emerald-100 text-emerald-800" },
+  market_kakao: { label: "💛 카카오페이", color: "bg-yellow-100 text-yellow-800" },
+  market_naver: { label: "💚 네이버페이", color: "bg-green-100 text-green-800" },
   market_other: { label: "🛵 기타 빌마켓", color: "bg-rose-100 text-rose-800" },
   regular_survey: { label: "📝 일반설문", color: "bg-blue-100 text-blue-800" },
   daily_quiz: { label: "❓ 데일리퀴즈", color: "bg-purple-100 text-purple-800" },
@@ -249,13 +249,13 @@ function processTransaction(row) {
     const absP = Math.abs(pts);
     if (absP === 10000 || absP === 9700 || absP === 20000) {
       catKey = 'market_baemin';
-      displayTitle = '🛵 [배달의민족] 모바일상품권 1만원';
+      displayTitle = absP === 20000 ? '🛵 [배달의민족] 2만원권' : '🛵 [배달의민족] 1만원권';
     } else if (absP === 3000 || absP === 15000 || (absP === 5000 && desc.includes('카카오'))) {
       catKey = 'market_kakao';
-      displayTitle = '💛 [카카오페이] 포인트 모바일 상품권';
+      displayTitle = absP === 15000 ? '💛 [카카오페이] 1만5천원 교환권' : (absP === 3000 ? '💛 [카카오페이] 3천원 교환권' : '💛 [카카오페이] 5천원 교환권');
     } else if (absP === 5000 || desc.includes('네이버')) {
       catKey = 'market_naver';
-      displayTitle = '💚 [네이버페이] 5천원 포인트 쿠폰';
+      displayTitle = '💚 [네이버페이] 5천원권';
     } else {
       catKey = 'market_other';
       displayTitle = '🛵 빌마켓 상품 결제';
@@ -303,96 +303,95 @@ function processTransaction(row) {
   };
 }
 
+let loadTransactionsPromise = null;
+
 // Fetch all transactions from Supabase REST API (Parallel + Stale-While-Revalidate Cache)
-export async function loadTransactions() {
-  const loadingEl = document.getElementById('loadingSpinner');
+export function loadTransactions() {
+  if (loadTransactionsPromise) return loadTransactionsPromise;
 
-  // 1. Instant Render from Local Cache (0.01초 즉시 표시)
-  let hasCache = false;
-  try {
-    const rawCache = localStorage.getItem('dva_cached_transactions');
-    if (rawCache) {
-      const cachedRows = JSON.parse(rawCache);
-      if (Array.isArray(cachedRows) && cachedRows.length > 0) {
-        state.transactions = cachedRows.map(processTransaction);
-        populateMonthDropdown();
-        renderApp();
-        hasCache = true;
-      }
-    }
-  } catch (e) {
-    console.warn('Failed to load local cache:', e);
-  }
-
-  // Only show full-screen spinner if there's no cache at all
-  if (!hasCache && loadingEl) {
-    loadingEl.classList.remove('hidden');
-  }
-
-  // 2. High-speed Parallel Fetch via Promise.all (0.3초대)
-  try {
-    const url = `${SUPABASE_URL}/rest/v1/dva_point_transactions?select=trans_date,account_name,category,service_type,description,points,expire_date,tx_hash&order=trans_date.desc,account_name.asc,day_seq.asc,tx_hash.asc`;
-    const batchRanges = ['0-999', '1000-1999', '2000-2999', '3000-3999'];
-
-    const responses = await Promise.all(batchRanges.map(range => 
-      fetch(url, {
-        headers: {
-          'apikey': SUPABASE_KEY,
-          'Authorization': `Bearer ${SUPABASE_KEY}`,
-          'Range': range
+  loadTransactionsPromise = (async () => {
+    // 1. Instant Render from Local Cache (0.01초 즉시 표시)
+    let hasCache = false;
+    try {
+      const rawCache = localStorage.getItem('dva_cached_transactions');
+      if (rawCache) {
+        const cachedRows = JSON.parse(rawCache);
+        if (Array.isArray(cachedRows) && cachedRows.length > 0) {
+          state.transactions = cachedRows.map(processTransaction);
+          populateMonthDropdown();
+          renderApp();
+          hasCache = true;
         }
-      }).then(r => r.ok ? r.json() : [])
-    ));
+      }
+    } catch (e) {
+      console.warn('Failed to load local cache:', e);
+    }
 
-    let allRows = responses.flat();
+    // 2. High-speed Parallel Fetch via Promise.all (0.3초대 백그라운드 프리패칭)
+    try {
+      const url = `${SUPABASE_URL}/rest/v1/dva_point_transactions?select=trans_date,account_name,category,service_type,description,points,expire_date,tx_hash&order=trans_date.desc,account_name.asc,day_seq.asc,tx_hash.asc`;
+      const batchRanges = ['0-999', '1000-1999', '2000-2999', '3000-3999'];
 
-    // If data exceeded 4,000 rows in future, fetch remainder seamlessly
-    if (responses[responses.length - 1]?.length === 1000) {
-      let offset = 4000;
-      while (true) {
-        const extraRes = await fetch(url, {
+      const responses = await Promise.all(batchRanges.map(range => 
+        fetch(url, {
           headers: {
             'apikey': SUPABASE_KEY,
             'Authorization': `Bearer ${SUPABASE_KEY}`,
-            'Range': `${offset}-${offset + 999}`
+            'Range': range
           }
-        });
-        if (!extraRes.ok) break;
-        const batch = await extraRes.json();
-        if (!batch || batch.length === 0) break;
-        allRows = allRows.concat(batch);
-        if (batch.length < 1000) break;
-        offset += 1000;
+        }).then(r => r.ok ? r.json() : [])
+      ));
+
+      let allRows = responses.flat();
+
+      // If data exceeded 4,000 rows in future, fetch remainder seamlessly
+      if (responses[responses.length - 1]?.length === 1000) {
+        let offset = 4000;
+        while (true) {
+          const extraRes = await fetch(url, {
+            headers: {
+              'apikey': SUPABASE_KEY,
+              'Authorization': `Bearer ${SUPABASE_KEY}`,
+              'Range': `${offset}-${offset + 999}`
+            }
+          });
+          if (!extraRes.ok) break;
+          const batch = await extraRes.json();
+          if (!batch || batch.length === 0) break;
+          allRows = allRows.concat(batch);
+          if (batch.length < 1000) break;
+          offset += 1000;
+        }
       }
-    }
 
-    // Deduplicate by tx_hash to guarantee 100% integrity
-    const seen = new Set();
-    const dedupedRows = [];
-    for (const row of allRows) {
-      const key = row.tx_hash || `${row.account_name}_${row.trans_date}_${row.description}_${row.points}`;
-      if (!seen.has(key)) {
-        seen.add(key);
-        dedupedRows.push(row);
+      // Deduplicate by tx_hash to guarantee 100% integrity
+      const seen = new Set();
+      const dedupedRows = [];
+      for (const row of allRows) {
+        const key = row.tx_hash || `${row.account_name}_${row.trans_date}_${row.description}_${row.points}`;
+        if (!seen.has(key)) {
+          seen.add(key);
+          dedupedRows.push(row);
+        }
       }
-    }
 
-    // Update state & Local Storage Cache
-    state.transactions = dedupedRows.map(processTransaction);
-    try {
-      localStorage.setItem('dva_cached_transactions', JSON.stringify(dedupedRows));
-    } catch (e) {
-      // quota safeguard
-    }
+      // Update state & Local Storage Cache
+      state.transactions = dedupedRows.map(processTransaction);
+      try {
+        localStorage.setItem('dva_cached_transactions', JSON.stringify(dedupedRows));
+      } catch (e) {
+        // quota safeguard
+      }
 
-    console.log(`Loaded ${state.transactions.length} point transactions in parallel`);
-    populateMonthDropdown();
-    renderApp();
-  } catch (error) {
-    console.error('Failed to load transactions from Supabase:', error);
-  } finally {
-    if (loadingEl) loadingEl.classList.add('hidden');
-  }
+      console.log(`Loaded ${state.transactions.length} point transactions in parallel`);
+      populateMonthDropdown();
+      renderApp();
+    } catch (error) {
+      console.error('Failed to load transactions from Supabase:', error);
+    }
+  })();
+
+  return loadTransactionsPromise;
 }
 
 // Populate Month Dropdown based on unique transaction months
