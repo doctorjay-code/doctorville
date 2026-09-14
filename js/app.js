@@ -247,15 +247,34 @@ function processTransaction(row) {
   // 2. BilMarket / Coupon Purchases
   else if (pts < 0 || desc.includes('결제') || desc.includes('비즈마켓') || desc.includes('포인트샵') || desc.includes('쿠폰') || desc.includes('전환')) {
     const absP = Math.abs(pts);
-    if (absP === 10000 || absP === 9700 || absP === 20000) {
+
+    // 1) 배달의민족: 10,000P, 20,000P 또는 9,700P의 정수배 (19,400P, 29,100P, 38,800P, 48,500P, 87,300P 등)
+    if (absP === 10000 || absP === 20000 || (absP % 9700 === 0 && absP >= 9700) || desc.includes('배달의민족') || desc.includes('배민')) {
       catKey = 'market_baemin';
-      displayTitle = absP === 20000 ? '🛵 [배달의민족] 2만원권' : '🛵 [배달의민족] 1만원권';
-    } else if (absP === 3000 || absP === 15000 || (absP === 5000 && desc.includes('카카오'))) {
+      const sheets = absP % 9700 === 0 ? (absP / 9700) : (absP / 10000);
+      displayTitle = sheets === 1 ? '🛵 [배달의민족] 1만원권' : `🛵 [배달의민족] 1만원권 ${sheets}장`;
+    }
+    // 2) 카카오페이: 9,900P(1만원), 3,000P, 15,000P, 또는 desc에 '카카오' 포함
+    else if (absP === 9900 || absP === 3000 || absP === 15000 || desc.includes('카카오')) {
       catKey = 'market_kakao';
-      displayTitle = absP === 15000 ? '💛 [카카오페이] 1만5천원 교환권' : (absP === 3000 ? '💛 [카카오페이] 3천원 교환권' : '💛 [카카오페이] 5천원 교환권');
-    } else if (absP === 5000 || desc.includes('네이버')) {
+      if (absP === 9900 || absP === 10000) displayTitle = '💛 [카카오페이] 1만원 교환권';
+      else if (absP === 15000) displayTitle = '💛 [카카오페이] 1만5천원 교환권';
+      else if (absP === 3000) displayTitle = '💛 [카카오페이] 3천원 교환권';
+      else displayTitle = '💛 [카카오페이] 5천원 교환권';
+    }
+    // 3) 네이버페이: 4,900P(5천원), 5,000P, 또는 desc에 '네이버' 포함
+    else if (absP === 4900 || absP === 5000 || desc.includes('네이버')) {
       catKey = 'market_naver';
-      displayTitle = '💚 [네이버페이] 5천원권';
+      if (desc.includes('전환')) displayTitle = `💚 [네이버페이] ${absP.toLocaleString()}원 전환`;
+      else displayTitle = '💚 [네이버페이] 5천원권';
+    }
+    // 4) 기타 상품: 기프티콘 5만원권, 식음료 3,900원 등
+    else if (absP === 50000 || desc.includes('기프티콘')) {
+      catKey = 'market_other';
+      displayTitle = '🎁 [기프티콘] 모바일 5만원권';
+    } else if (absP === 3900) {
+      catKey = 'market_other';
+      displayTitle = '☕ [빌마켓] 커피/식음료 모바일 쿠폰';
     } else {
       catKey = 'market_other';
       displayTitle = '🛵 빌마켓 상품 결제';
