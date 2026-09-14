@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <title>닥터빌 포인트 모바일 대시보드</title>
+  <meta name="theme-color" content="#2563EB">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <script src="https://www.gstatic.com/antigravity/web/dev/tailwindcss.min.js"></script>
+  <link rel="stylesheet" href="./css/style.css">
+</head>
+<body class="bg-slate-50 text-slate-900 pb-16 antialiased">
+
+  <!-- Security Auth Modal Overlay (Adapted from Schedule) -->
+  <div id="authModalOverlay" class="auth-modal-overlay active">
+    <div class="auth-card">
+      <div class="auth-icon">🔒</div>
+      <h2 class="auth-title">보안 포인트 시스템 접속</h2>
+      <p class="auth-subtitle">포인트 내역을 열람하려면 비밀번호를 입력해주세요.</p>
+      
+      <div class="auth-input-group">
+        <input type="password" id="authPasswordInput" class="auth-input" placeholder="비밀번호 입력..." autocomplete="off" />
+        <button id="authSubmitBtn" class="auth-submit-btn">접속하기</button>
+      </div>
+      
+      <div id="authErrorMsg" class="auth-error-msg hidden"></div>
+      <div id="authLockoutTimer" class="auth-lockout-timer hidden"></div>
+    </div>
+  </div>
+
+  <!-- Loading Spinner -->
+  <div id="loadingSpinner" class="fixed inset-0 bg-white/70 backdrop-blur-sm flex items-center justify-center z-50 hidden">
+    <div class="flex flex-col items-center gap-2">
+      <div class="w-8 h-8 border-4 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
+      <span class="text-xs font-semibold text-slate-600">데이터 로딩 중...</span>
+    </div>
+  </div>
+
+  <!-- Main App Wrapper (Mobile-first responsive container) -->
+  <div class="max-w-md mx-auto px-4 pt-4 space-y-4">
+    
+    <!-- 1. Header & Account Switcher -->
+    <header class="bg-white rounded-2xl p-4 card-shadow border border-slate-100 space-y-3">
+      <div class="flex items-center justify-between">
+        <div class="flex items-center gap-2">
+          <span class="text-2xl">💎</span>
+          <div>
+            <h1 class="text-base font-bold text-slate-900 leading-tight">포인트 관제 대시보드</h1>
+            <span class="text-[11px] text-emerald-600 font-semibold flex items-center gap-1">
+              <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+              실시간 연동 중
+            </span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Account Selection Tabs (No '원장') -->
+      <div class="flex bg-slate-100 p-1 rounded-xl">
+        <button id="tab-all" class="account-tab flex-1 py-2 text-xs font-semibold rounded-lg bg-white text-blue-600 shadow-sm transition-all">전체</button>
+        <button id="tab-beomjun" class="account-tab flex-1 py-2 text-xs font-semibold rounded-lg text-slate-500 transition-all">박범준</button>
+        <button id="tab-juha" class="account-tab flex-1 py-2 text-xs font-semibold rounded-lg text-slate-500 transition-all">박주하</button>
+      </div>
+
+      <!-- Current Balance Card -->
+      <div class="bg-gradient-to-br from-blue-600 to-indigo-700 rounded-xl p-4 text-white shadow-md">
+        <span class="text-xs font-medium text-blue-100 uppercase tracking-wider">현재 보유 잔여 포인트</span>
+        <div class="text-3xl font-black tracking-tight mt-1" id="currentBalance">76,600 P</div>
+        <div class="text-[11px] text-blue-200 mt-2 border-t border-blue-500/40 pt-2" id="balanceSubText">
+          박범준: <strong>38,200P</strong> &nbsp;|&nbsp; 박주하: <strong>38,400P</strong>
+        </div>
+      </div>
+    </header>
+
+    <!-- 2. This Month KPI Cards (Earned & Spent + Month-over-Month Diff) -->
+    <div class="grid grid-cols-2 gap-2.5">
+      <!-- Earned Card -->
+      <div class="bg-white rounded-2xl p-3.5 card-shadow border border-slate-100 flex flex-col justify-between">
+        <div>
+          <span class="text-[11px] font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded">이번 달 적립 포인트</span>
+          <div class="text-xl font-black text-emerald-600 mt-2" id="thisMonthEarned">+257,600 P</div>
+        </div>
+        <div class="text-[10px] text-slate-500 mt-2 pt-2 border-t border-slate-100" id="earnedDiffText">
+          전월(8월) 대비 <span class="text-emerald-600 font-semibold">+64,900P (▲ 33.7%)</span>
+        </div>
+      </div>
+
+      <!-- Spent Card -->
+      <div class="bg-white rounded-2xl p-3.5 card-shadow border border-slate-100 flex flex-col justify-between">
+        <div>
+          <span class="text-[11px] font-bold text-rose-700 bg-rose-50 px-2 py-0.5 rounded">이번 달 사용 포인트</span>
+          <div class="text-xl font-black text-rose-600 mt-2" id="thisMonthSpent">-197,600 P</div>
+        </div>
+        <div class="text-[10px] text-slate-500 mt-2 pt-2 border-t border-slate-100" id="spentDiffText">
+          전월(8월) 대비 <span class="text-blue-600 font-semibold">-356,900P (▼ 64.4%)</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- 3. Full-History Monthly Trend Bar Chart (Scrollable & Separated Capsules) -->
+    <div class="bg-white rounded-2xl p-4 card-shadow border border-slate-100 space-y-2">
+      <div class="flex items-center justify-between">
+        <div>
+          <h2 class="text-xs font-bold text-slate-900">월별 적립 및 소비 추이 (전체 기간)</h2>
+          <p class="text-[10px] text-slate-400">월 캡슐을 터치하면 해당 월만 조회됩니다 (좌우 스크롤)</p>
+        </div>
+        <div class="flex items-center gap-2.5 text-[10px] font-semibold">
+          <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-emerald-500"></span> 적립</span>
+          <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-rose-400"></span> 사용</span>
+        </div>
+      </div>
+
+      <!-- Scrollable Month Capsules Container -->
+      <div id="monthlyChartScroll" class="overflow-x-auto pb-1.5 pt-1 scrollbar-thin">
+        <div id="monthlyBarsContainer" class="flex items-end gap-2 px-1 min-w-max">
+          <!-- Month Capsules injected via app.js -->
+        </div>
+      </div>
+    </div>
+
+    <!-- 4. Transactions Viewer & Multi-Select Filters Section -->
+    <div id="transactionsSection" class="bg-white rounded-2xl p-4 card-shadow border border-slate-100 space-y-4">
+      <div class="flex items-center justify-between">
+        <h2 class="text-sm font-bold text-slate-900">전체 거래 내역 조회</h2>
+        <button id="clearCategoriesBtn" class="text-[11px] font-semibold text-blue-600 hover:underline">
+          필터 초기화
+        </button>
+      </div>
+
+      <!-- 4-A. Date Presets & Month Dropdown -->
+      <div class="space-y-2">
+        <div class="flex items-center justify-between">
+          <span class="text-[11px] font-bold text-slate-400 uppercase tracking-wider block">조회 기간</span>
+          <!-- Month Dropdown Selector -->
+          <div class="flex items-center gap-1">
+            <span class="text-[11px] text-slate-500 font-medium">달 선택:</span>
+            <select id="monthSelect" class="text-xs font-semibold px-2 py-1 rounded-lg border border-slate-200 bg-slate-50 text-slate-700 focus:outline-none focus:border-blue-500">
+              <option value="">전체 월 (선택 안 함)</option>
+            </select>
+          </div>
+        </div>
+        <div class="flex flex-wrap gap-1.5">
+          <button class="date-preset-btn px-2.5 py-1 text-xs font-medium rounded-lg bg-blue-600 text-white" data-preset="all">전체</button>
+          <button class="date-preset-btn px-2.5 py-1 text-xs font-medium rounded-lg bg-slate-100 text-slate-600" data-preset="2026">2026년</button>
+          <button class="date-preset-btn px-2.5 py-1 text-xs font-medium rounded-lg bg-slate-100 text-slate-600" data-preset="thisMonth">이번달</button>
+          <button class="date-preset-btn px-2.5 py-1 text-xs font-medium rounded-lg bg-slate-100 text-slate-600" data-preset="lastMonth">지난달</button>
+          <button class="date-preset-btn px-2.5 py-1 text-xs font-medium rounded-lg bg-slate-100 text-slate-600" data-preset="3months">최근 3개월</button>
+          <button class="date-preset-btn px-2.5 py-1 text-xs font-medium rounded-lg bg-slate-100 text-slate-600" data-preset="custom">직접입력</button>
+        </div>
+
+        <!-- Custom Date Range Inputs (Hidden by default) -->
+        <div id="customDateInputs" class="hidden flex items-center gap-2 pt-1">
+          <input type="date" id="customStartDate" class="flex-1 px-2.5 py-1.5 rounded-lg border border-slate-200 text-xs text-slate-700 focus:outline-none focus:border-blue-500">
+          <span class="text-xs text-slate-400">~</span>
+          <input type="date" id="customEndDate" class="flex-1 px-2.5 py-1.5 rounded-lg border border-slate-200 text-xs text-slate-700 focus:outline-none focus:border-blue-500">
+        </div>
+      </div>
+
+      <!-- 4-B. Multi-Select Category Filters -->
+      <div class="space-y-3 pt-2 border-t border-slate-100">
+        <div>
+          <span class="text-[11px] font-bold text-slate-400 uppercase tracking-wider block mb-1.5">🎯 심화 설문 (다중 선택 가능)</span>
+          <div class="flex flex-wrap gap-1.5">
+            <span class="filter-chip" data-cat="deep_9000">🏆 9,000P</span>
+            <span class="filter-chip" data-cat="deep_4000">🥈 4,000P</span>
+            <span class="filter-chip" data-cat="deep_2000">🥉 2,000P~3,000P</span>
+          </div>
+        </div>
+
+        <div>
+          <span class="text-[11px] font-bold text-slate-400 uppercase tracking-wider block mb-1.5">🛵 빌마켓 사용 (다중 선택 가능)</span>
+          <div class="flex flex-wrap gap-1.5">
+            <span class="filter-chip" data-cat="market_baemin">🛵 배달의민족</span>
+            <span class="filter-chip" data-cat="market_kakao">💛 카카오페이</span>
+            <span class="filter-chip" data-cat="market_naver">💚 네이버페이</span>
+            <span class="filter-chip" data-cat="market_other">기타 상품</span>
+          </div>
+        </div>
+
+        <div>
+          <span class="text-[11px] font-bold text-slate-400 uppercase tracking-wider block mb-1.5">기타 활동 (다중 선택 가능)</span>
+          <div class="flex flex-wrap gap-1.5">
+            <span class="filter-chip" data-cat="regular_survey">📝 일반설문 (1,000P)</span>
+            <span class="filter-chip" data-cat="daily_quiz">❓ 데일리퀴즈</span>
+            <span class="filter-chip" data-cat="attendance">📅 출석체크</span>
+            <span class="filter-chip" data-cat="birthday">🎂 생일/기타</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- 4-C. Search Input -->
+      <div class="pt-2 border-t border-slate-100">
+        <input type="text" id="searchInput" placeholder="내역, 세미나ID, 키워드 검색..." 
+               class="w-full px-3.5 py-2 rounded-xl border border-slate-200 text-xs focus:outline-none focus:ring-2 focus:ring-blue-500">
+      </div>
+
+      <!-- 4-D. Separated Summary Calculation Bar (적립/지출 분리 계산) -->
+      <div class="bg-slate-50 rounded-xl p-3 border border-slate-200 space-y-1.5">
+        <div class="flex items-center justify-between text-[11px] font-semibold text-slate-500">
+          <span>선택된 조건 내역</span>
+          <strong class="text-slate-800 text-xs" id="summaryTotalCount">0건</strong>
+        </div>
+        <div class="grid grid-cols-2 gap-2 pt-1 border-t border-slate-200/60">
+          <div class="bg-white p-2 rounded-lg border border-slate-100">
+            <span class="text-[10px] text-slate-400 block">🟢 적립 합계</span>
+            <strong class="text-xs font-bold text-emerald-600" id="summaryEarned">+0 P</strong>
+          </div>
+          <div class="bg-white p-2 rounded-lg border border-slate-100">
+            <span class="text-[10px] text-slate-400 block">🔴 지출 합계</span>
+            <strong class="text-xs font-bold text-rose-600" id="summarySpent">-0 P</strong>
+          </div>
+        </div>
+      </div>
+
+      <!-- 4-E. Transaction Cards List -->
+      <div id="transactionListContainer" class="space-y-2 pt-1">
+        <!-- Rendered via app.js -->
+      </div>
+
+      <!-- Pagination -->
+      <div class="flex items-center justify-between pt-3 border-t border-slate-100 text-xs text-slate-500">
+        <button id="prevPageBtn" class="px-3 py-1.5 rounded-lg border border-slate-200 font-medium disabled:opacity-30">이전</button>
+        <span id="currentPageNumber" class="font-semibold text-slate-700">1 / 1</span>
+        <button id="nextPageBtn" class="px-3 py-1.5 rounded-lg border border-slate-200 font-medium disabled:opacity-30">다음</button>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- App Bootstrap -->
+  <script type="module">
+    import { initSecurityAuth, setAuthSuccessCallback } from './js/auth.js';
+    import { loadTransactions, setupEventHandlers } from './js/app.js';
+
+    document.addEventListener('DOMContentLoaded', () => {
+      setupEventHandlers();
+      setAuthSuccessCallback(() => {
+        loadTransactions();
+      });
+      initSecurityAuth();
+    });
+  </script>
+</body>
+</html>
