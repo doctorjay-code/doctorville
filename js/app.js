@@ -212,12 +212,13 @@ const state = {
 const CATEGORY_MAP = {
   deep_9000: { label: "🎯 9,000P 심화", color: "bg-amber-500 text-white" },
   deep_4000: { label: "🎯 4,000P 심화", color: "bg-amber-100 text-amber-800" },
-  deep_2000: { label: "🎯 2,000P~3,000P 심화", color: "bg-amber-50 text-amber-700" },
+  deep_3000: { label: "🎯 3,000P 심화", color: "bg-amber-100 text-amber-900 border border-amber-200" },
+  deep_2000: { label: "🎯 2,000P 심화", color: "bg-amber-50 text-amber-700" },
   market_baemin: { label: "🛵 배달의민족 상품권", color: "bg-emerald-100 text-emerald-800" },
   market_kakao: { label: "💛 카카오페이 포인트", color: "bg-yellow-100 text-yellow-800" },
   market_naver: { label: "💚 네이버페이 포인트", color: "bg-green-100 text-green-800" },
   market_other: { label: "🛵 기타 빌마켓", color: "bg-rose-100 text-rose-800" },
-  regular_survey: { label: "📝 일반설문 (1,000P)", color: "bg-blue-100 text-blue-800" },
+  regular_survey: { label: "📝 일반설문", color: "bg-blue-100 text-blue-800" },
   daily_quiz: { label: "❓ 데일리퀴즈", color: "bg-purple-100 text-purple-800" },
   attendance: { label: "📅 출석체크", color: "bg-slate-100 text-slate-700" },
   birthday: { label: "🎂 생일포인트", color: "bg-pink-100 text-pink-800" },
@@ -268,6 +269,7 @@ function processTransaction(row) {
 
     if (pts >= 9000) catKey = 'deep_9000';
     else if (pts >= 4000) catKey = 'deep_4000';
+    else if (pts >= 3000) catKey = 'deep_3000';
     else if (pts >= 2000) catKey = 'deep_2000';
     else catKey = 'regular_survey';
 
