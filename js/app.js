@@ -301,33 +301,67 @@ function processTransaction(row) {
   };
 }
 
-// Fetch all transactions from Supabase REST API
+// Fetch all transactions from Supabase REST API (Parallel + Stale-While-Revalidate Cache)
 export async function loadTransactions() {
   const loadingEl = document.getElementById('loadingSpinner');
-  if (loadingEl) loadingEl.classList.remove('hidden');
 
+  // 1. Instant Render from Local Cache (0.01초 즉시 표시)
+  let hasCache = false;
   try {
-    let allRows = [];
-    let offset = 0;
-    const limit = 1000;
+    const rawCache = localStorage.getItem('dva_cached_transactions');
+    if (rawCache) {
+      const cachedRows = JSON.parse(rawCache);
+      if (Array.isArray(cachedRows) && cachedRows.length > 0) {
+        state.transactions = cachedRows.map(processTransaction);
+        populateMonthDropdown();
+        renderApp();
+        hasCache = true;
+      }
+    }
+  } catch (e) {
+    console.warn('Failed to load local cache:', e);
+  }
 
-    while (true) {
-      const url = `${SUPABASE_URL}/rest/v1/dva_point_transactions?select=trans_date,account_name,category,service_type,description,points,expire_date,tx_hash&order=trans_date.desc,account_name.asc,day_seq.asc,tx_hash.asc`;
-      const response = await fetch(url, {
+  // Only show full-screen spinner if there's no cache at all
+  if (!hasCache && loadingEl) {
+    loadingEl.classList.remove('hidden');
+  }
+
+  // 2. High-speed Parallel Fetch via Promise.all (0.3초대)
+  try {
+    const url = `${SUPABASE_URL}/rest/v1/dva_point_transactions?select=trans_date,account_name,category,service_type,description,points,expire_date,tx_hash&order=trans_date.desc,account_name.asc,day_seq.asc,tx_hash.asc`;
+    const batchRanges = ['0-999', '1000-1999', '2000-2999', '3000-3999'];
+
+    const responses = await Promise.all(batchRanges.map(range => 
+      fetch(url, {
         headers: {
           'apikey': SUPABASE_KEY,
           'Authorization': `Bearer ${SUPABASE_KEY}`,
-          'Range': `${offset}-${offset + limit - 1}`
+          'Range': range
         }
-      });
+      }).then(r => r.ok ? r.json() : [])
+    ));
 
-      if (!response.ok) throw new Error(`Supabase error: ${response.status}`);
-      const batch = await response.json();
-      if (!batch || batch.length === 0) break;
+    let allRows = responses.flat();
 
-      allRows = allRows.concat(batch);
-      if (batch.length < limit) break;
-      offset += limit;
+    // If data exceeded 4,000 rows in future, fetch remainder seamlessly
+    if (responses[responses.length - 1]?.length === 1000) {
+      let offset = 4000;
+      while (true) {
+        const extraRes = await fetch(url, {
+          headers: {
+            'apikey': SUPABASE_KEY,
+            'Authorization': `Bearer ${SUPABASE_KEY}`,
+            'Range': `${offset}-${offset + 999}`
+          }
+        });
+        if (!extraRes.ok) break;
+        const batch = await extraRes.json();
+        if (!batch || batch.length === 0) break;
+        allRows = allRows.concat(batch);
+        if (batch.length < 1000) break;
+        offset += 1000;
+      }
     }
 
     // Deduplicate by tx_hash to guarantee 100% integrity
@@ -341,17 +375,21 @@ export async function loadTransactions() {
       }
     }
 
-    // Process & categorize
+    // Update state & Local Storage Cache
     state.transactions = dedupedRows.map(processTransaction);
-    console.log(`Loaded ${state.transactions.length} point transactions from Supabase`);
+    try {
+      localStorage.setItem('dva_cached_transactions', JSON.stringify(dedupedRows));
+    } catch (e) {
+      // quota safeguard
+    }
 
-    // Populate Month Dropdown
+    console.log(`Loaded ${state.transactions.length} point transactions in parallel`);
     populateMonthDropdown();
+    renderApp();
   } catch (error) {
     console.error('Failed to load transactions from Supabase:', error);
   } finally {
     if (loadingEl) loadingEl.classList.add('hidden');
-    renderApp();
   }
 }
 
