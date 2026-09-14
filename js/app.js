@@ -312,7 +312,7 @@ export async function loadTransactions() {
     const limit = 1000;
 
     while (true) {
-      const url = `${SUPABASE_URL}/rest/v1/dva_point_transactions?select=trans_date,account_name,category,service_type,description,points,expire_date&order=trans_date.desc,day_seq.asc`;
+      const url = `${SUPABASE_URL}/rest/v1/dva_point_transactions?select=trans_date,account_name,category,service_type,description,points,expire_date,tx_hash&order=trans_date.desc,account_name.asc,day_seq.asc,tx_hash.asc`;
       const response = await fetch(url, {
         headers: {
           'apikey': SUPABASE_KEY,
@@ -330,8 +330,19 @@ export async function loadTransactions() {
       offset += limit;
     }
 
+    // Deduplicate by tx_hash to guarantee 100% integrity
+    const seen = new Set();
+    const dedupedRows = [];
+    for (const row of allRows) {
+      const key = row.tx_hash || `${row.account_name}_${row.trans_date}_${row.description}_${row.points}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        dedupedRows.push(row);
+      }
+    }
+
     // Process & categorize
-    state.transactions = allRows.map(processTransaction);
+    state.transactions = dedupedRows.map(processTransaction);
     console.log(`Loaded ${state.transactions.length} point transactions from Supabase`);
 
     // Populate Month Dropdown
