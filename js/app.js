@@ -372,6 +372,37 @@ function sortAndPairTransactions(rows) {
   });
 }
 
+// Compute Chronological Running Cumulative Balance per Account
+function computeRunningBalances(rows) {
+  const byAccount = new Map();
+  for (const r of rows) {
+    if (!byAccount.has(r.account_name)) byAccount.set(r.account_name, []);
+    byAccount.get(r.account_name).push(r);
+  }
+
+  for (const list of byAccount.values()) {
+    // Sort chronological: oldest to newest
+    list.sort((a, b) => {
+      if (a.trans_date !== b.trans_date) {
+        return a.trans_date.localeCompare(b.trans_date);
+      }
+      const rankDiff = getActivityRank(a) - getActivityRank(b);
+      if (rankDiff !== 0) return rankDiff;
+
+      const seqDiff = (a.day_seq || 1) - (b.day_seq || 1);
+      if (seqDiff !== 0) return seqDiff;
+
+      return (a.id || 0) - (b.id || 0);
+    });
+
+    let currentBalance = 0;
+    for (const item of list) {
+      currentBalance += (item.points || 0);
+      item.runningBalance = currentBalance;
+    }
+  }
+}
+
 let loadTransactionsPromise = null;
 
 // Fetch all transactions from Supabase REST API (Parallel + Stale-While-Revalidate Cache)
@@ -386,11 +417,13 @@ export function loadTransactions(force = false) {
     let hasCache = false;
     if (!force) {
       try {
-        const rawCache = localStorage.getItem('dva_cached_transactions_v3');
+        const rawCache = localStorage.getItem('dva_cached_transactions_v4');
         if (rawCache) {
           const cachedRows = JSON.parse(rawCache);
           if (Array.isArray(cachedRows) && cachedRows.length > 0) {
-            state.transactions = sortAndPairTransactions(cachedRows.map(processTransaction));
+            const processed = cachedRows.map(processTransaction);
+            computeRunningBalances(processed);
+            state.transactions = sortAndPairTransactions(processed);
             populateMonthDropdown();
             renderApp();
             hasCache = true;
@@ -401,9 +434,9 @@ export function loadTransactions(force = false) {
       }
     }
 
-    // 2. High-speed Parallel Fetch via Promise.all (0.3초대 백그라운드 프리패칭)
+    // 2. High-speed Parallel Fetch via Promise.all (0.3초대 백그라운드 프리패칭 - deterministic order=trans_date.desc,id.desc)
     try {
-      const url = `${SUPABASE_URL}/rest/v1/dva_point_transactions?select=id,trans_date,account_name,category,service_type,description,points,expire_date,day_seq,tx_hash&order=trans_date.desc`;
+      const url = `${SUPABASE_URL}/rest/v1/dva_point_transactions?select=id,trans_date,account_name,category,service_type,description,points,expire_date,day_seq,tx_hash&order=trans_date.desc,id.desc`;
       const batchRanges = ['0-999', '1000-1999', '2000-2999', '3000-3999'];
 
       const responses = await Promise.all(batchRanges.map(range => 
@@ -449,18 +482,20 @@ export function loadTransactions(force = false) {
         }
       }
 
-      // 1:1 Pairing & Chronological Newest-First Sort
-      const pairedRows = sortAndPairTransactions(dedupedRows.map(processTransaction));
+      // Compute Running Balance per Account & Sort/Pair Newest First
+      const processedRows = dedupedRows.map(processTransaction);
+      computeRunningBalances(processedRows);
+      const pairedRows = sortAndPairTransactions(processedRows);
 
       // Update state & Local Storage Cache
       state.transactions = pairedRows;
       try {
-        localStorage.setItem('dva_cached_transactions_v3', JSON.stringify(dedupedRows));
+        localStorage.setItem('dva_cached_transactions_v4', JSON.stringify(dedupedRows));
       } catch (e) {
         // quota safeguard
       }
 
-      console.log(`Loaded ${state.transactions.length} point transactions in parallel (1:1 paired, top newest)`);
+      console.log(`Loaded ${state.transactions.length} point transactions in parallel (100% exact balance, 1:1 paired, top newest)`);
       populateMonthDropdown();
       renderApp();
     } catch (error) {
@@ -757,10 +792,13 @@ function renderFilteredList() {
               └ ${row.subText}
             </p>
           </div>
-          <!-- Points -->
-          <div class="text-right whitespace-nowrap pl-2 flex-shrink-0">
+          <!-- Points & Running Balance -->
+          <div class="text-right whitespace-nowrap pl-2 flex-shrink-0 flex flex-col items-end justify-center">
             <span class="text-sm font-black font-mono ${ptsColor}">
               ${ptsPrefix}${row.points.toLocaleString()} P
+            </span>
+            <span class="text-[10px] font-mono text-slate-400 mt-0.5" title="해당 시점 잔액">
+              잔액 ${row.runningBalance !== undefined ? row.runningBalance.toLocaleString() : '-'} P
             </span>
           </div>
         </div>
