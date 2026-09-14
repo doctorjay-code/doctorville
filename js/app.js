@@ -325,25 +325,30 @@ function processTransaction(row) {
 let loadTransactionsPromise = null;
 
 // Fetch all transactions from Supabase REST API (Parallel + Stale-While-Revalidate Cache)
-export function loadTransactions() {
+export function loadTransactions(force = false) {
+  if (force) {
+    loadTransactionsPromise = null;
+  }
   if (loadTransactionsPromise) return loadTransactionsPromise;
 
   loadTransactionsPromise = (async () => {
-    // 1. Instant Render from Local Cache (0.01초 즉시 표시)
+    // 1. Instant Render from Local Cache (0.01초 즉시 표시 - force가 아닐 때)
     let hasCache = false;
-    try {
-      const rawCache = localStorage.getItem('dva_cached_transactions');
-      if (rawCache) {
-        const cachedRows = JSON.parse(rawCache);
-        if (Array.isArray(cachedRows) && cachedRows.length > 0) {
-          state.transactions = cachedRows.map(processTransaction);
-          populateMonthDropdown();
-          renderApp();
-          hasCache = true;
+    if (!force) {
+      try {
+        const rawCache = localStorage.getItem('dva_cached_transactions');
+        if (rawCache) {
+          const cachedRows = JSON.parse(rawCache);
+          if (Array.isArray(cachedRows) && cachedRows.length > 0) {
+            state.transactions = cachedRows.map(processTransaction);
+            populateMonthDropdown();
+            renderApp();
+            hasCache = true;
+          }
         }
+      } catch (e) {
+        console.warn('Failed to load local cache:', e);
       }
-    } catch (e) {
-      console.warn('Failed to load local cache:', e);
     }
 
     // 2. High-speed Parallel Fetch via Promise.all (0.3초대 백그라운드 프리패칭)
@@ -407,6 +412,8 @@ export function loadTransactions() {
       renderApp();
     } catch (error) {
       console.error('Failed to load transactions from Supabase:', error);
+    } finally {
+      loadTransactionsPromise = null;
     }
   })();
 
@@ -726,6 +733,22 @@ function renderFilteredList() {
 
 // Event Handlers for UI Controls
 export function setupEventHandlers() {
+  // Refresh Button Listener
+  const btnRefresh = document.getElementById('btnRefresh');
+  if (btnRefresh) {
+    btnRefresh.addEventListener('click', async () => {
+      const icon = document.getElementById('refreshIcon');
+      if (icon) icon.classList.add('animate-spin');
+      try {
+        await loadTransactions(true);
+      } finally {
+        setTimeout(() => {
+          if (icon) icon.classList.remove('animate-spin');
+        }, 500);
+      }
+    });
+  }
+
   // Account Tabs
   ['all', 'beomjun', 'juha'].forEach(tabId => {
     const btn = document.getElementById(`tab-${tabId}`);
