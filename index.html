@@ -34,13 +34,7 @@
     </div>
   </div>
 
-  <!-- Loading Spinner -->
-  <div id="loadingSpinner" class="fixed inset-0 bg-white/70 backdrop-blur-sm flex items-center justify-center z-50 hidden">
-    <div class="flex flex-col items-center gap-2">
-      <div class="w-8 h-8 border-4 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
-      <span class="text-xs font-semibold text-slate-600">데이터 로딩 중...</span>
-    </div>
-  </div>
+  <!-- Non-intrusive Inline Status replaces full-screen blocking spinner -->
 
   <!-- Main App Wrapper (Mobile-first responsive container) -->
   <div class="max-w-md mx-auto px-4 pt-4 space-y-4">
@@ -236,12 +230,16 @@
   <!-- App Bootstrap -->
   <script type="module">
     import { initSecurityAuth, setAuthSuccessCallback } from './js/auth.js';
-    import { loadTransactions, setupEventHandlers } from './js/app.js';
+    import { loadTransactions, setupEventHandlers, renderApp } from './js/app.js';
 
     document.addEventListener('DOMContentLoaded', () => {
       setupEventHandlers();
+      // 1. 즉시 백그라운드 병렬 프리패칭 시작 (비밀번호 입력 도중 이미 로딩/렌더링 완료)
+      loadTransactions();
+
+      // 2. 비밀번호 인증 성공 시 대기 없이 즉시 화면 노출
       setAuthSuccessCallback(() => {
-        loadTransactions();
+        renderApp();
       });
       initSecurityAuth();
     });
