@@ -72,8 +72,8 @@
       <!-- Account Selection Tabs (No '원장') -->
       <div class="flex bg-slate-100 p-1 rounded-xl">
         <button id="tab-all" class="account-tab flex-1 py-2 text-xs font-semibold rounded-lg bg-white text-blue-600 shadow-sm transition-all">전체</button>
-        <button id="tab-beomjun" class="account-tab flex-1 py-2 text-xs font-semibold rounded-lg text-slate-500 transition-all">박범준</button>
-        <button id="tab-juha" class="account-tab flex-1 py-2 text-xs font-semibold rounded-lg text-slate-500 transition-all">박주하</button>
+        <button id="tab-beomjun" class="account-tab flex-1 py-2 text-xs font-semibold rounded-lg text-slate-500 transition-all">BJ</button>
+        <button id="tab-juha" class="account-tab flex-1 py-2 text-xs font-semibold rounded-lg text-slate-500 transition-all">JH</button>
       </div>
 
       <!-- Current Balance Card -->
@@ -81,7 +81,7 @@
         <span class="text-xs font-medium text-blue-100 uppercase tracking-wider">현재 보유 잔여 포인트</span>
         <div class="text-3xl font-black tracking-tight mt-1" id="currentBalance">76,600 P</div>
         <div class="text-[11px] text-blue-200 mt-2 border-t border-blue-500/40 pt-2" id="balanceSubText">
-          박범준: <strong>38,200P</strong> &nbsp;|&nbsp; 박주하: <strong>38,400P</strong>
+          BJ: <strong>38,200P</strong> &nbsp;|&nbsp; JH: <strong>38,400P</strong>
         </div>
       </div>
     </header>
@@ -246,18 +246,33 @@
 
     <!-- ================= VIEW 2: 세미나 & 심화설문 아카이브 ================= -->
     <div id="seminarArchiveSection" class="space-y-4 hidden">
-      <!-- A. Control Bar: Month Selector & Sub-Mode Toggle -->
-      <div class="bg-white rounded-2xl p-3.5 card-shadow border border-slate-100 flex items-center justify-between gap-2">
-        <div class="flex items-center gap-1.5">
-          <span class="text-xs font-bold text-slate-500">조회 월:</span>
-          <select id="seminarMonthSelect" class="text-xs font-bold px-2.5 py-1.5 rounded-lg border border-slate-200 bg-slate-50 text-slate-800 focus:outline-none focus:border-blue-500">
-            <!-- Populated via JS -->
-          </select>
+      <!-- A. Control Bar: Month Selector, Mode Toggle & 1,000P Survey Filter -->
+      <div class="bg-white rounded-2xl p-3.5 card-shadow border border-slate-100 space-y-2.5">
+        <div class="flex items-center justify-between gap-2">
+          <div class="flex items-center gap-1.5">
+            <span class="text-xs font-bold text-slate-500">조회 월:</span>
+            <select id="seminarMonthSelect" class="text-xs font-bold px-2.5 py-1.5 rounded-lg border border-slate-200 bg-slate-50 text-slate-800 focus:outline-none focus:border-blue-500">
+              <!-- Populated via JS -->
+            </select>
+          </div>
+          <!-- Mode Switch: Monthly Calendar vs Daily Timeline -->
+          <div class="flex bg-slate-100 p-1 rounded-xl gap-1">
+            <button id="seminarModeMonth" class="px-2.5 py-1 text-xs font-bold rounded-lg bg-white text-blue-600 shadow-xs transition-all">📅 월간 달력</button>
+            <button id="seminarModeDaily" class="px-2.5 py-1 text-xs font-bold rounded-lg text-slate-500 hover:text-slate-800 transition-all">📆 일간 상세</button>
+          </div>
         </div>
-        <!-- Mode Switch: Monthly Calendar vs Daily Timeline -->
-        <div class="flex bg-slate-100 p-1 rounded-xl gap-1">
-          <button id="seminarModeMonth" class="px-2.5 py-1 text-xs font-bold rounded-lg bg-white text-blue-600 shadow-xs transition-all">📅 월간 달력</button>
-          <button id="seminarModeDaily" class="px-2.5 py-1 text-xs font-bold rounded-lg text-slate-500 hover:text-slate-800 transition-all">📆 일간 상세</button>
+
+        <!-- 1,000P Regular Survey Filter Toggle -->
+        <div class="flex items-center justify-between pt-2 border-t border-slate-100 text-xs">
+          <span class="text-[11px] font-semibold text-slate-400">1,000P 수강 설문:</span>
+          <div class="flex bg-slate-100 p-0.5 rounded-lg gap-1">
+            <button id="filterDeepOnlyBtn" class="px-2.5 py-1 text-[11px] font-bold rounded-md bg-white text-blue-600 shadow-xs transition-all flex items-center gap-1">
+              <span>🎯</span> 숨김 (심화만)
+            </button>
+            <button id="filterAllSurveysBtn" class="px-2.5 py-1 text-[11px] font-medium rounded-md text-slate-500 hover:text-slate-800 transition-all flex items-center gap-1">
+              <span>📝</span> 모두 표시
+            </button>
+          </div>
         </div>
       </div>
 
@@ -311,7 +326,7 @@
   <!-- App Bootstrap -->
   <script type="module">
     import { initSecurityAuth, setAuthSuccessCallback } from './js/auth.js';
-    import { loadTransactions, setupEventHandlers, renderApp } from './js/app.js?v=7';
+    import { loadTransactions, setupEventHandlers, renderApp } from './js/app.js?v=8';
 
     document.addEventListener('DOMContentLoaded', () => {
       setupEventHandlers();
