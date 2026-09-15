@@ -9,7 +9,10 @@ const SEMINAR_TITLES = {
   "5659": "Easyef MD Spray for Cutaneous and Mucosal Regeneration: From EGF Biology to Clinical Evidence",
   "5656": "[ENDO WEEK] No.1 Gemigliptin Web Zeminar",
   "5655": "[ENDO WEEK] Advances in Diabetes Management Clinical Benefits of SGLT-2 Inhibitors in Combination Therapy",
+  "5637": "[ENDO WEEK] 엔블로 Web Symposium",
   "5636": "[ENDO WEEK] ALL 4 ONE WEB Symposium",
+  "5628": "Does Switching Within the DPP-4 Inhibitor Class Make a Real Difference?: Integrating Korean RWE into Diabetes Care",
+  "5627": "Love Life Love Liver",
   "5626": "BEYOND Web Symposium",
   "5625": "[ENDO WEEK] Optimal Combination Therapy for Diabetes Management",
   "5624": "ARB Strategies in Atrial Fibrillation – Clinical Value of Olmesartan",
@@ -295,6 +298,8 @@ function processTransaction(row) {
 
     if (sid && SEMINAR_TITLES[sid]) {
       displayTitle = `📘 ${SEMINAR_TITLES[sid]}`;
+    } else if (sid) {
+      displayTitle = `📘 세미나 설문 (${sid})`;
     } else if (catKey !== 'regular_survey') {
       displayTitle = '🎯 닥터빌 라이브 심화설문';
     } else {
@@ -349,27 +354,42 @@ function getActivityRank(row) {
 
 // 1:1 Pairing & Chronological Newest-First (Top is Newest) Sorter
 function sortAndPairTransactions(rows) {
+  // 1. Group transactions into events for intra-day chronological ordering & 1:1 pairing
+  const eventMaxId = new Map();
+  for (const r of rows) {
+    const eventKey = `${r.trans_date}|${r.categoryKey}|${r.displayTitle}|${r.points}|${r.day_seq || 1}`;
+    const curMax = eventMaxId.get(eventKey) || 0;
+    if ((r.id || 0) > curMax) {
+      eventMaxId.set(eventKey, r.id || 0);
+    }
+  }
+
   return rows.sort((a, b) => {
     // 1. trans_date DESC (newest date first)
     if (a.trans_date !== b.trans_date) {
       return b.trans_date.localeCompare(a.trans_date);
     }
-    // 2. Activity Category DESC (Seminars/Market -> Quiz -> Attendance)
+
+    // 2. Intra-day Event Chronological Order DESC (Newest Event Top via max ID)
+    const aKey = `${a.trans_date}|${a.categoryKey}|${a.displayTitle}|${a.points}|${a.day_seq || 1}`;
+    const bKey = `${b.trans_date}|${b.categoryKey}|${b.displayTitle}|${b.points}|${b.day_seq || 1}`;
+    const aMaxId = eventMaxId.get(aKey) || 0;
+    const bMaxId = eventMaxId.get(bKey) || 0;
+    if (bMaxId !== aMaxId) {
+      return bMaxId - aMaxId;
+    }
+
+    // 3. Fallback: Activity Category Rank DESC
     const rankDiff = getActivityRank(b) - getActivityRank(a);
     if (rankDiff !== 0) return rankDiff;
 
-    // 3. day_seq DESC (6 -> 5 -> 4 -> 3 -> 2 -> 1 for multiple daily seminars)
-    const seqDiff = (b.day_seq || 1) - (a.day_seq || 1);
-    if (seqDiff !== 0) return seqDiff;
-
-    // 4. Match exact same description (e.g. specific seminar name)
-    const descDiff = (b.description || '').localeCompare(a.description || '', 'ko');
-    if (descDiff !== 0) return descDiff;
-
-    // 5. Account pairing: 박범준 first, then 박주하
+    // 4. Account pairing: 박범준 first, then 박주하
     const aOrder = a.account_name === '박범준' ? 0 : 1;
     const bOrder = b.account_name === '박범준' ? 0 : 1;
-    return aOrder - bOrder;
+    if (aOrder !== bOrder) return aOrder - bOrder;
+
+    // 5. Tie breaker
+    return (b.id || 0) - (a.id || 0);
   });
 }
 
@@ -382,17 +402,11 @@ function computeRunningBalances(rows) {
   }
 
   for (const list of byAccount.values()) {
-    // Sort chronological: oldest to newest
+    // Sort chronological: oldest to newest (exact ID order)
     list.sort((a, b) => {
       if (a.trans_date !== b.trans_date) {
         return a.trans_date.localeCompare(b.trans_date);
       }
-      const rankDiff = getActivityRank(a) - getActivityRank(b);
-      if (rankDiff !== 0) return rankDiff;
-
-      const seqDiff = (a.day_seq || 1) - (b.day_seq || 1);
-      if (seqDiff !== 0) return seqDiff;
-
       return (a.id || 0) - (b.id || 0);
     });
 
