@@ -4,11 +4,15 @@ const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZ
 
 // 전 기간 188종 세미나 타이틀 사전 (2025.06 ~ 2026.09 전체)
 const SEMINAR_TITLES = {
+  "5667": "ALL 4 ONE WEB Symposium",
   "5663": "Exploring the therapeutic potential of SGLT-2 Inhibitors",
   "5662": "크레스토 웹심포지엄",
+  "5661": "[재] Love Life Love Liver",
   "5659": "Easyef MD Spray for Cutaneous and Mucosal Regeneration: From EGF Biology to Clinical Evidence",
   "5656": "[ENDO WEEK] No.1 Gemigliptin Web Zeminar",
   "5655": "[ENDO WEEK] Advances in Diabetes Management Clinical Benefits of SGLT-2 Inhibitors in Combination Therapy",
+  "5645": "[ENDO WEEK] 골다공증 톺아보기",
+  "5642": "[ENDO WEEK] 골다공증, 제대로 이해하기",
   "5637": "[ENDO WEEK] 엔블로 Web Symposium",
   "5636": "[ENDO WEEK] ALL 4 ONE WEB Symposium",
   "5628": "Does Switching Within the DPP-4 Inhibitor Class Make a Real Difference?: Integrating Korean RWE into Diabetes Care",
@@ -224,7 +228,7 @@ const state = {
   selectedSeminarMonth: '2026-09',
   selectedDailyDate: null,
   hideRegularSurveys: true, // true: 1,000P 기본설문 숨김 (심화설문 집중 모드), false: 1,000P 포함
-  allAnswersExpanded: true, // true: 주관식 답변 기본 펼침(Open)
+  allAnswersExpanded: false, // false: 주관식 답변 기본 접힘(Closed)
   surveyRecords: [],
   seminarsMaster: []
 };
@@ -501,7 +505,11 @@ export function loadTransactions(force = false) {
         state.seminarsMaster = semRows;
         for (const s of semRows) {
           if (s.seminar_id && s.title) {
-            SEMINAR_TITLES[s.seminar_id] = s.title;
+            const cleanTitle = s.title.trim();
+            if (cleanTitle.includes('만족도') || cleanTitle.includes('설문조사 양식') || cleanTitle.includes('양식 폼')) {
+              continue;
+            }
+            SEMINAR_TITLES[s.seminar_id] = cleanTitle;
           }
         }
       }
@@ -685,9 +693,13 @@ function getAggregatedSeminarData(targetMonth) {
     const daySems = dateMap.get(dt);
 
     if (!daySems.has(sKey)) {
+      let tTitle = sid && SEMINAR_TITLES[sid] ? SEMINAR_TITLES[sid] : (tx.displayTitle || '').replace(/^[📘🎯📝]\s*/, '');
+      if ((tTitle.includes('만족도') || tTitle.includes('양식 폼')) && sid && SEMINAR_TITLES[sid]) {
+        tTitle = SEMINAR_TITLES[sid];
+      }
       daySems.set(sKey, {
         sid: sid || '',
-        title: sid && SEMINAR_TITLES[sid] ? SEMINAR_TITLES[sid] : (tx.displayTitle || '').replace(/^[📘🎯📝]\s*/, ''),
+        title: tTitle,
         date: dt,
         pointsByAccount: {},
         totalPoints: 0,
@@ -742,9 +754,10 @@ function getAggregatedSeminarData(targetMonth) {
 
     let matchedItem = sid && daySems.has(sid) ? daySems.get(sid) : null;
     if (!matchedItem) {
+      const recTitle = (sRec.seminar_title && !sRec.seminar_title.includes('만족도') && !sRec.seminar_title.includes('양식 폼')) ? sRec.seminar_title : '';
       matchedItem = {
         sid: sid,
-        title: sRec.seminar_title || (sid && SEMINAR_TITLES[sid]) || '라이브 세미나 심화설문',
+        title: recTitle || (sid && SEMINAR_TITLES[sid]) || '라이브 세미나 심화설문',
         date: sDate,
         pointsByAccount: {},
         totalPoints: sRec.points_awarded || 0,
@@ -773,9 +786,10 @@ function getAggregatedSeminarData(targetMonth) {
     const daySems = dateMap.get(mDate);
     const sid = sMaster.seminar_id;
     if (sid && !daySems.has(sid)) {
+      const mTitle = (sMaster.title && !sMaster.title.includes('만족도') && !sMaster.title.includes('양식 폼')) ? sMaster.title : (sid && SEMINAR_TITLES[sid] ? SEMINAR_TITLES[sid] : '라이브 세미나');
       daySems.set(sid, {
         sid: sid,
-        title: sMaster.title,
+        title: mTitle,
         date: mDate,
         timeRange: sMaster.time_range || '19:00 ~ 20:00',
         pointsByAccount: {},
@@ -947,6 +961,21 @@ function renderDailyTimeline(targetMonth, dateMap) {
     `;
     return;
   }
+
+  // Action Bar: 전체 주관식 답변 접기/펼치기 토글
+  const actionToolbar = document.createElement('div');
+  actionToolbar.className = "flex items-center justify-between px-1 py-0.5 text-xs";
+  actionToolbar.innerHTML = `
+    <span class="text-[11px] font-semibold text-slate-400">일간 세미나 상세 일정</span>
+    <button class="btn-toggle-all-answers px-2.5 py-1 rounded-lg border border-slate-200 bg-white text-[11px] font-bold text-slate-600 hover:bg-slate-50 flex items-center gap-1 shadow-2xs transition-all">
+      <span>${state.allAnswersExpanded ? '전체 답변 접기 🔼' : '전체 답변 펼치기 🔽'}</span>
+    </button>
+  `;
+  actionToolbar.querySelector('.btn-toggle-all-answers').addEventListener('click', () => {
+    state.allAnswersExpanded = !state.allAnswersExpanded;
+    renderDailyTimeline(targetMonth, dateMap);
+  });
+  container.appendChild(actionToolbar);
 
   for (const dt of datesToShow) {
     const daySems = dateMap.get(dt);
