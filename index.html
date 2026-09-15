@@ -59,6 +59,16 @@
         </button>
       </div>
 
+      <!-- Main Mode Switcher: Point Ledger vs Seminar Archive -->
+      <div class="flex bg-slate-200/70 p-1 rounded-xl gap-1">
+        <button id="mainTabPoints" class="main-mode-tab flex-1 py-2 text-xs font-bold rounded-lg bg-white text-blue-600 shadow-sm transition-all flex items-center justify-center gap-1.5">
+          <span>💰</span> 포인트 가계부
+        </button>
+        <button id="mainTabSeminars" class="main-mode-tab flex-1 py-2 text-xs font-bold rounded-lg text-slate-500 hover:text-slate-800 transition-all flex items-center justify-center gap-1.5">
+          <span>📑</span> 세미나 & 설문 아카이브
+        </button>
+      </div>
+
       <!-- Account Selection Tabs (No '원장') -->
       <div class="flex bg-slate-100 p-1 rounded-xl">
         <button id="tab-all" class="account-tab flex-1 py-2 text-xs font-semibold rounded-lg bg-white text-blue-600 shadow-sm transition-all">전체</button>
@@ -75,6 +85,9 @@
         </div>
       </div>
     </header>
+
+    <!-- ================= VIEW 1: 포인트 가계부 ================= -->
+    <div id="pointsViewSection" class="space-y-4">
 
     <!-- 2. This Month KPI Cards (Earned & Spent + Month-over-Month Diff) -->
     <div class="grid grid-cols-2 gap-2.5">
@@ -229,13 +242,76 @@
         <button id="nextPageBtn" class="px-3 py-1.5 rounded-lg border border-slate-200 font-medium disabled:opacity-30">다음</button>
       </div>
     </div>
+    </div><!-- End pointsViewSection -->
 
-  </div>
+    <!-- ================= VIEW 2: 세미나 & 심화설문 아카이브 ================= -->
+    <div id="seminarArchiveSection" class="space-y-4 hidden">
+      <!-- A. Control Bar: Month Selector & Sub-Mode Toggle -->
+      <div class="bg-white rounded-2xl p-3.5 card-shadow border border-slate-100 flex items-center justify-between gap-2">
+        <div class="flex items-center gap-1.5">
+          <span class="text-xs font-bold text-slate-500">조회 월:</span>
+          <select id="seminarMonthSelect" class="text-xs font-bold px-2.5 py-1.5 rounded-lg border border-slate-200 bg-slate-50 text-slate-800 focus:outline-none focus:border-blue-500">
+            <!-- Populated via JS -->
+          </select>
+        </div>
+        <!-- Mode Switch: Monthly Calendar vs Daily Timeline -->
+        <div class="flex bg-slate-100 p-1 rounded-xl gap-1">
+          <button id="seminarModeMonth" class="px-2.5 py-1 text-xs font-bold rounded-lg bg-white text-blue-600 shadow-xs transition-all">📅 월간 달력</button>
+          <button id="seminarModeDaily" class="px-2.5 py-1 text-xs font-bold rounded-lg text-slate-500 hover:text-slate-800 transition-all">📆 일간 상세</button>
+        </div>
+      </div>
+
+      <!-- B. Monthly Seminar KPI Summary -->
+      <div class="grid grid-cols-3 gap-2">
+        <div class="bg-white p-3 rounded-xl card-shadow border border-slate-100 text-center">
+          <span class="text-[10px] text-slate-400 block font-semibold">진행/예정 세미나</span>
+          <strong class="text-sm font-black text-slate-800 mt-0.5 block" id="seminarKpiCount">0건</strong>
+        </div>
+        <div class="bg-white p-3 rounded-xl card-shadow border border-slate-100 text-center">
+          <span class="text-[10px] text-slate-400 block font-semibold">세미나 획득 포인트</span>
+          <strong class="text-sm font-black text-emerald-600 mt-0.5 block" id="seminarKpiPoints">+0 P</strong>
+        </div>
+        <div class="bg-white p-3 rounded-xl card-shadow border border-slate-100 text-center">
+          <span class="text-[10px] text-slate-400 block font-semibold">심화설문 작성</span>
+          <strong class="text-sm font-black text-blue-600 mt-0.5 block" id="seminarKpiSurveys">0건</strong>
+        </div>
+      </div>
+
+      <!-- C. Monthly Calendar View Container -->
+      <div id="seminarCalendarContainer" class="bg-white rounded-2xl p-3.5 card-shadow border border-slate-100 space-y-3">
+        <!-- Calendar Header -->
+        <div class="flex items-center justify-between">
+          <h3 class="text-xs font-bold text-slate-800 flex items-center gap-1.5" id="calendarMonthTitle">
+            <span>📅</span> 세미나 월간 달력
+          </h3>
+          <span class="text-[10px] text-slate-400">날짜 터치 시 일간 상세 이동</span>
+        </div>
+        <!-- Days of Week -->
+        <div class="grid grid-cols-7 gap-1 text-center text-[10px] font-bold text-slate-400 border-b border-slate-100 pb-1.5">
+          <div class="text-rose-500">일</div>
+          <div>월</div>
+          <div>화</div>
+          <div>수</div>
+          <div>목</div>
+          <div>금</div>
+          <div class="text-blue-500">토</div>
+        </div>
+        <!-- Calendar Days Grid -->
+        <div id="calendarDaysGrid" class="grid grid-cols-7 gap-1">
+          <!-- Injected via JS -->
+        </div>
+      </div>
+
+      <!-- D. Daily Timeline View Container -->
+      <div id="seminarTimelineContainer" class="space-y-3 hidden">
+        <!-- Daily Group Cards Injected via JS -->
+      </div>
+    </div>
 
   <!-- App Bootstrap -->
   <script type="module">
     import { initSecurityAuth, setAuthSuccessCallback } from './js/auth.js';
-    import { loadTransactions, setupEventHandlers, renderApp } from './js/app.js?v=6';
+    import { loadTransactions, setupEventHandlers, renderApp } from './js/app.js?v=7';
 
     document.addEventListener('DOMContentLoaded', () => {
       setupEventHandlers();
