@@ -8,6 +8,7 @@ const SEMINAR_TITLES = {
   "5662": "크레스토 웹심포지엄",
   "5659": "Easyef MD Spray for Cutaneous and Mucosal Regeneration: From EGF Biology to Clinical Evidence",
   "5656": "[ENDO WEEK] No.1 Gemigliptin Web Zeminar",
+  "5655": "[ENDO WEEK] Advances in Diabetes Management Clinical Benefits of SGLT-2 Inhibitors in Combination Therapy",
   "5636": "[ENDO WEEK] ALL 4 ONE WEB Symposium",
   "5626": "BEYOND Web Symposium",
   "5625": "[ENDO WEEK] Optimal Combination Therapy for Diabetes Management",
@@ -437,17 +438,34 @@ export function loadTransactions(force = false) {
     // 2. High-speed Parallel Fetch via Promise.all (0.3초대 백그라운드 프리패칭 - deterministic order=trans_date.desc,id.desc)
     try {
       const url = `${SUPABASE_URL}/rest/v1/dva_point_transactions?select=id,trans_date,account_name,category,service_type,description,points,expire_date,day_seq,tx_hash&order=trans_date.desc,id.desc`;
+      const semUrl = `${SUPABASE_URL}/rest/v1/dva_seminars?select=seminar_id,title`;
       const batchRanges = ['0-999', '1000-1999', '2000-2999', '3000-3999'];
 
-      const responses = await Promise.all(batchRanges.map(range => 
-        fetch(url, {
+      const [responses, semRows] = await Promise.all([
+        Promise.all(batchRanges.map(range => 
+          fetch(url, {
+            headers: {
+              'apikey': SUPABASE_KEY,
+              'Authorization': `Bearer ${SUPABASE_KEY}`,
+              'Range': range
+            }
+          }).then(r => r.ok ? r.json() : [])
+        )),
+        fetch(semUrl, {
           headers: {
             'apikey': SUPABASE_KEY,
-            'Authorization': `Bearer ${SUPABASE_KEY}`,
-            'Range': range
+            'Authorization': `Bearer ${SUPABASE_KEY}`
           }
-        }).then(r => r.ok ? r.json() : [])
-      ));
+        }).then(r => r.ok ? r.json() : []).catch(() => [])
+      ]);
+
+      if (Array.isArray(semRows)) {
+        for (const s of semRows) {
+          if (s.seminar_id && s.title) {
+            SEMINAR_TITLES[s.seminar_id] = s.title;
+          }
+        }
+      }
 
       let allRows = responses.flat();
 
