@@ -198,6 +198,15 @@ const SEMINAR_TITLES = {
   "4795": "클린콜정, 장정결제의 패러다임 전환"
 };
 
+// Account Display Name Mapping (박범준 -> BJ, 박주하 -> JH)
+const ACCOUNT_DISPLAY = {
+  '박범준': 'BJ',
+  '박주하': 'JH'
+};
+function formatAccountName(name) {
+  return ACCOUNT_DISPLAY[name] || name;
+}
+
 // Global State
 const state = {
   account: 'all', // 'all' | '박범준' | '박주하'
@@ -214,6 +223,8 @@ const state = {
   seminarViewMode: 'monthly', // 'monthly' | 'daily'
   selectedSeminarMonth: '2026-09',
   selectedDailyDate: null,
+  hideRegularSurveys: true, // true: 1,000P 기본설문 숨김 (심화설문 집중 모드), false: 1,000P 포함
+  allAnswersExpanded: true, // true: 주관식 답변 기본 펼침(Open)
   surveyRecords: [],
   seminarsMaster: []
 };
@@ -639,6 +650,16 @@ function populateSeminarMonthDropdown() {
 function getAggregatedSeminarData(targetMonth) {
   const dateMap = new Map();
 
+  // 0. Build global survey answers lookup map by seminar_id
+  const globalSurveyMap = new Map();
+  for (const sRec of (state.surveyRecords || [])) {
+    const sid = sRec.seminar_id;
+    if (sid) {
+      if (!globalSurveyMap.has(sid)) globalSurveyMap.set(sid, []);
+      globalSurveyMap.get(sid).push(sRec);
+    }
+  }
+
   // 1. Gather from transactions (actual earned points)
   for (const tx of state.transactions) {
     if (!tx.trans_date.startsWith(targetMonth)) continue;
@@ -650,6 +671,12 @@ function getAggregatedSeminarData(targetMonth) {
     const isSurvey = desc.includes('설문') || desc.includes('세미나');
 
     if (!isSurvey && !sid) continue;
+
+    // 1,000P 단순 출석 기본 설문 필터링 (심화설문만 보기 모드일 때 제외)
+    const isRegular1000 = tx.points <= 1000 && !desc.includes('심화') && !(sid && globalSurveyMap.has(sid));
+    if (state.hideRegularSurveys && isRegular1000) {
+      continue;
+    }
 
     const sKey = sid || `survey_${tx.points}_${tx.day_seq || 1}`;
     const dt = tx.trans_date;
@@ -665,7 +692,7 @@ function getAggregatedSeminarData(targetMonth) {
         pointsByAccount: {},
         totalPoints: 0,
         surveyAnswers: {},
-        isDeepSurvey: tx.points >= 2000,
+        isDeepSurvey: tx.points >= 2000 || (sid && globalSurveyMap.has(sid)),
         status: '완료'
       });
     }
@@ -673,29 +700,47 @@ function getAggregatedSeminarData(targetMonth) {
     const item = daySems.get(sKey);
     item.pointsByAccount[tx.account_name] = (item.pointsByAccount[tx.account_name] || 0) + tx.points;
     item.totalPoints += tx.points;
-    if (tx.points >= 2000) item.isDeepSurvey = true;
+    if (tx.points >= 2000 || (sid && globalSurveyMap.has(sid))) item.isDeepSurvey = true;
+
+    // seminar_id가 일치하는 주관식 설문 내역 자동 결합 (입금일/방송일 무관하게 100% 바인딩)
+    if (sid && globalSurveyMap.has(sid)) {
+      for (const sRec of globalSurveyMap.get(sid)) {
+        if (state.account === 'all' || sRec.account_name === state.account) {
+          if (!item.surveyAnswers[sRec.account_name]) {
+            item.surveyAnswers[sRec.account_name] = {
+              question: sRec.question,
+              answer: sRec.subjective_answer,
+              charCount: sRec.char_count || (sRec.subjective_answer ? sRec.subjective_answer.length : 0),
+              submittedAt: sRec.submitted_at
+            };
+          }
+        }
+      }
+    }
   }
 
-  // 2. Attach subjective answers from surveyRecords
+  // 2. Attach subjective answers from surveyRecords for dates where no point transaction exists yet (e.g. 당일 설문 제출 건)
   for (const sRec of (state.surveyRecords || [])) {
     const sDate = sRec.seminar_date || (sRec.submitted_at ? sRec.submitted_at.slice(0, 10) : '');
     if (!sDate.startsWith(targetMonth)) continue;
     if (state.account !== 'all' && sRec.account_name !== state.account) continue;
 
+    const sid = sRec.seminar_id || '';
+
+    // 이미 이번 달 거래 내역에서 해당 세미나가 표시되었는지 확인
+    let alreadyHandled = false;
+    for (const dSems of dateMap.values()) {
+      if (sid && dSems.has(sid)) {
+        alreadyHandled = true;
+        break;
+      }
+    }
+    if (alreadyHandled) continue;
+
     if (!dateMap.has(sDate)) dateMap.set(sDate, new Map());
     const daySems = dateMap.get(sDate);
 
-    const sid = sRec.seminar_id || '';
-    let matchedItem = null;
-    if (sid && daySems.has(sid)) {
-      matchedItem = daySems.get(sid);
-    } else {
-      for (const it of daySems.values()) {
-        if (sid && it.sid === sid) { matchedItem = it; break; }
-        if (sRec.seminar_title && it.title.includes(sRec.seminar_title.slice(0, 15))) { matchedItem = it; break; }
-      }
-    }
-
+    let matchedItem = sid && daySems.has(sid) ? daySems.get(sid) : null;
     if (!matchedItem) {
       matchedItem = {
         sid: sid,
@@ -714,7 +759,7 @@ function getAggregatedSeminarData(targetMonth) {
       matchedItem.surveyAnswers[sRec.account_name] = {
         question: sRec.question,
         answer: sRec.subjective_answer,
-        charCount: sRec.char_count || sRec.subjective_answer.length,
+        charCount: sRec.char_count || (sRec.subjective_answer ? sRec.subjective_answer.length : 0),
         submittedAt: sRec.submitted_at
       };
     }
@@ -946,7 +991,7 @@ function renderDailyTimeline(targetMonth, dateMap) {
             <div class="flex items-center gap-2 text-[10px] text-slate-500 pt-1 border-t border-slate-200/50">
               <span>계정별 적립:</span>
               ${Object.entries(sem.pointsByAccount).map(([acc, pts]) => `
-                <span class="font-medium text-slate-700"><strong>${acc}</strong>: +${pts.toLocaleString()}P</span>
+                <span class="font-medium text-slate-700"><strong>${formatAccountName(acc)}</strong>: +${pts.toLocaleString()}P</span>
               `).join(' · ')}
             </div>
           ` : ''}
@@ -956,21 +1001,22 @@ function renderDailyTimeline(targetMonth, dateMap) {
               <button class="toggle-subjective-btn w-full py-1.5 px-2.5 rounded-lg bg-white border border-slate-200 text-[11px] font-bold text-slate-700 flex items-center justify-between hover:bg-slate-50 transition-all">
                 <span class="flex items-center gap-1.5">
                   <span>✍️</span> AI 심화설문 주관식 작성 내역
-                  <span class="text-[10px] font-normal text-slate-400">(${Object.keys(sem.surveyAnswers).join(', ')})</span>
+                  <span class="text-[10px] font-bold text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded">전문 수록</span>
+                  <span class="text-[10px] font-normal text-slate-400">(${Object.keys(sem.surveyAnswers).map(formatAccountName).join(', ')})</span>
                 </span>
-                <span class="accordion-arrow text-slate-400 transition-transform">▼</span>
+                <span class="accordion-arrow text-slate-400 transition-transform" style="transform: ${state.allAnswersExpanded ? 'rotate(180deg)' : 'rotate(0deg)'}">▼</span>
               </button>
-              <div class="subjective-content hidden mt-2 space-y-2 text-xs">
+              <div class="subjective-content ${state.allAnswersExpanded ? '' : 'hidden'} mt-2 space-y-2 text-xs">
                 ${Object.entries(sem.surveyAnswers).map(([acc, ansObj]) => `
-                  <div class="bg-white p-2.5 rounded-lg border border-slate-200 space-y-1">
+                  <div class="bg-white p-3 rounded-xl border border-slate-200 shadow-2xs space-y-1.5">
                     <div class="flex items-center justify-between">
                       <span class="font-bold text-slate-800 flex items-center gap-1">
-                        ${acc === '박범준' ? '👨‍⚕️' : '👩‍⚕️'} ${acc}님
+                        ${acc === '박범준' ? '👨‍⚕️' : '👩‍⚕️'} <strong class="text-blue-900">${formatAccountName(acc)}님</strong>
                       </span>
-                      <span class="text-[10px] text-slate-400">${ansObj.charCount}자 작성</span>
+                      <span class="text-[10px] font-medium text-slate-400 bg-slate-100 px-1.5 py-0.5 rounded">${ansObj.charCount}자 작성</span>
                     </div>
-                    ${ansObj.question ? `<p class="text-[10px] text-slate-500 font-medium">Q. ${ansObj.question}</p>` : ''}
-                    <div class="p-2 bg-slate-50 rounded text-slate-700 leading-relaxed font-sans text-[11px] border border-slate-100">
+                    ${ansObj.question ? `<p class="text-[10px] text-slate-600 font-bold bg-slate-50 p-1.5 rounded border border-slate-100">Q. ${ansObj.question}</p>` : ''}
+                    <div class="p-2.5 bg-blue-50/40 rounded-lg text-slate-800 leading-relaxed font-sans text-xs border border-blue-100/60 break-keep">
                       "${ansObj.answer}"
                     </div>
                   </div>
@@ -1031,13 +1077,13 @@ function renderKPICards() {
 
   if (state.account === 'all') {
     if (balanceEl) balanceEl.innerText = `${(beomjunBalance + juhaBalance).toLocaleString()} P`;
-    if (balanceSubEl) balanceSubEl.innerHTML = `박범준: <strong>${beomjunBalance.toLocaleString()}P</strong> &nbsp;|&nbsp; 박주하: <strong>${juhaBalance.toLocaleString()}P</strong>`;
+    if (balanceSubEl) balanceSubEl.innerHTML = `BJ: <strong>${beomjunBalance.toLocaleString()}P</strong> &nbsp;|&nbsp; JH: <strong>${juhaBalance.toLocaleString()}P</strong>`;
   } else if (state.account === '박범준') {
     if (balanceEl) balanceEl.innerText = `${beomjunBalance.toLocaleString()} P`;
-    if (balanceSubEl) balanceSubEl.innerHTML = "박범준 계정 관제 중";
+    if (balanceSubEl) balanceSubEl.innerHTML = "BJ 계정 관제 중";
   } else {
     if (balanceEl) balanceEl.innerText = `${juhaBalance.toLocaleString()} P`;
-    if (balanceSubEl) balanceSubEl.innerHTML = "박주하 계정 관제 중";
+    if (balanceSubEl) balanceSubEl.innerHTML = "JH 계정 관제 중";
   }
 
   // Monthly stats (Current month 2026-09 vs previous month 2026-08)
@@ -1254,7 +1300,7 @@ function renderFilteredList() {
             <!-- 1st line: Date, Account, Category Badge -->
             <div class="flex items-center gap-1.5 mb-1">
               <span class="text-[11px] font-mono text-slate-400">${row.trans_date}</span>
-              <span class="badge bg-slate-100 text-slate-600 font-medium">${row.account_name}</span>
+              <span class="badge bg-slate-100 text-slate-600 font-medium">${formatAccountName(row.account_name)}</span>
               <span class="badge ${meta.color}">${meta.label}</span>
             </div>
             <!-- 2nd line: Prominent Seminar/Product Title -->
@@ -1455,6 +1501,38 @@ export function setupEventHandlers() {
       state.selectedSeminarMonth = e.target.value;
       state.selectedDailyDate = null;
       renderSeminarArchive();
+    });
+  }
+
+  // Seminar Filter: 1,000P General Survey Toggle (심화설문만 vs 전체)
+  const filterDeepBtn = document.getElementById('filterDeepOnlyBtn');
+  const filterAllBtn = document.getElementById('filterAllSurveysBtn');
+  if (filterDeepBtn && filterAllBtn) {
+    filterDeepBtn.addEventListener('click', () => {
+      state.hideRegularSurveys = true;
+      filterDeepBtn.className = "px-2.5 py-1 text-[11px] font-bold rounded-md bg-white text-blue-600 shadow-xs transition-all flex items-center gap-1";
+      filterAllBtn.className = "px-2.5 py-1 text-[11px] font-medium rounded-md text-slate-500 hover:text-slate-800 transition-all flex items-center gap-1";
+      renderSeminarArchive();
+    });
+
+    filterAllBtn.addEventListener('click', () => {
+      state.hideRegularSurveys = false;
+      filterAllBtn.className = "px-2.5 py-1 text-[11px] font-bold rounded-md bg-white text-blue-600 shadow-xs transition-all flex items-center gap-1";
+      filterDeepBtn.className = "px-2.5 py-1 text-[11px] font-medium rounded-md text-slate-500 hover:text-slate-800 transition-all flex items-center gap-1";
+      renderSeminarArchive();
+    });
+  }
+
+  // Toggle All Subjective Answers (전체 답변 접기 / 펼치기)
+  const btnToggleAll = document.getElementById('btnToggleAllAnswers');
+  const txtToggleAll = document.getElementById('toggleAllAnswersText');
+  if (btnToggleAll) {
+    btnToggleAll.addEventListener('click', () => {
+      state.allAnswersExpanded = !state.allAnswersExpanded;
+      if (txtToggleAll) {
+        txtToggleAll.innerText = state.allAnswersExpanded ? '전체 답변 접기' : '전체 답변 펼치기';
+      }
+      renderDailyTimeline(state.selectedSeminarMonth || '2026-09', getAggregatedSeminarData(state.selectedSeminarMonth || '2026-09'));
     });
   }
 
