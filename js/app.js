@@ -209,7 +209,13 @@ const state = {
   selectedCategories: new Set(), // Empty means ALL
   currentPage: 1,
   pageSize: 20,
-  transactions: []
+  transactions: [],
+  currentMainTab: 'points', // 'points' | 'seminars'
+  seminarViewMode: 'monthly', // 'monthly' | 'daily'
+  selectedSeminarMonth: '2026-09',
+  selectedDailyDate: null,
+  surveyRecords: [],
+  seminarsMaster: []
 };
 
 // Sub-category mapping definitions
@@ -452,10 +458,11 @@ export function loadTransactions(force = false) {
     // 2. High-speed Parallel Fetch via Promise.all (0.3초대 백그라운드 프리패칭 - deterministic order=trans_date.desc,id.desc)
     try {
       const url = `${SUPABASE_URL}/rest/v1/dva_point_transactions?select=id,trans_date,account_name,category,service_type,description,points,expire_date,day_seq,tx_hash&order=trans_date.desc,id.desc`;
-      const semUrl = `${SUPABASE_URL}/rest/v1/dva_seminars?select=seminar_id,title`;
+      const semUrl = `${SUPABASE_URL}/rest/v1/dva_seminars?select=*`;
+      const surveyUrl = `${SUPABASE_URL}/rest/v1/dva_survey_records?select=*&order=id.desc`;
       const batchRanges = ['0-999', '1000-1999', '2000-2999', '3000-3999'];
 
-      const [responses, semRows] = await Promise.all([
+      const [responses, semRows, surveyRows] = await Promise.all([
         Promise.all(batchRanges.map(range => 
           fetch(url, {
             headers: {
@@ -470,15 +477,26 @@ export function loadTransactions(force = false) {
             'apikey': SUPABASE_KEY,
             'Authorization': `Bearer ${SUPABASE_KEY}`
           }
+        }).then(r => r.ok ? r.json() : []).catch(() => []),
+        fetch(surveyUrl, {
+          headers: {
+            'apikey': SUPABASE_KEY,
+            'Authorization': `Bearer ${SUPABASE_KEY}`
+          }
         }).then(r => r.ok ? r.json() : []).catch(() => [])
       ]);
 
       if (Array.isArray(semRows)) {
+        state.seminarsMaster = semRows;
         for (const s of semRows) {
           if (s.seminar_id && s.title) {
             SEMINAR_TITLES[s.seminar_id] = s.title;
           }
         }
+      }
+
+      if (Array.isArray(surveyRows)) {
+        state.surveyRecords = surveyRows;
       }
 
       let allRows = responses.flat();
@@ -570,9 +588,433 @@ function computeMonthlyStats() {
 // Main Render Function
 export function renderApp() {
   renderKPICards();
-  renderMonthlyBarChart();
-  renderFilteredList();
+
+  const pointsSec = document.getElementById('pointsViewSection');
+  const semSec = document.getElementById('seminarArchiveSection');
+
+  if (state.currentMainTab === 'points') {
+    if (pointsSec) pointsSec.classList.remove('hidden');
+    if (semSec) semSec.classList.add('hidden');
+    renderMonthlyBarChart();
+    renderFilteredList();
+  } else {
+    if (pointsSec) pointsSec.classList.add('hidden');
+    if (semSec) semSec.classList.remove('hidden');
+    renderSeminarArchive();
+  }
 }
+
+// =========================================================================
+// 📑 세미나 & 심화설문 아카이브 관제 엔진 (일간/월간 듀얼 뷰)
+// =========================================================================
+
+function populateSeminarMonthDropdown() {
+  const selectEl = document.getElementById('seminarMonthSelect');
+  if (!selectEl) return;
+
+  const monthSet = new Set();
+  // Gather from transactions, surveyRecords, and current month
+  const nowYM = new Date().toISOString().slice(0, 7);
+  monthSet.add(nowYM);
+
+  state.transactions.forEach(r => {
+    if (r.trans_date && (r.description.includes('설문') || r.description.includes('세미나'))) {
+      monthSet.add(r.trans_date.slice(0, 7));
+    }
+  });
+  (state.surveyRecords || []).forEach(r => {
+    const d = r.seminar_date || (r.submitted_at ? r.submitted_at.slice(0, 7) : '');
+    if (d) monthSet.add(d.slice(0, 7));
+  });
+
+  const sortedYMs = Array.from(monthSet).sort().reverse();
+  const currentVal = state.selectedSeminarMonth || sortedYMs[0] || '2026-09';
+
+  selectEl.innerHTML = sortedYMs.map(ym => {
+    const [y, m] = ym.split('-');
+    return `<option value="${ym}" ${ym === currentVal ? 'selected' : ''}>${y}년 ${parseInt(m, 10)}월</option>`;
+  }).join('');
+}
+
+function getAggregatedSeminarData(targetMonth) {
+  const dateMap = new Map();
+
+  // 1. Gather from transactions (actual earned points)
+  for (const tx of state.transactions) {
+    if (!tx.trans_date.startsWith(targetMonth)) continue;
+    if (state.account !== 'all' && tx.account_name !== state.account) continue;
+
+    const desc = tx.description || '';
+    const m = desc.match(/(?:설문|세미나).*?([0-9]{4})/) || desc.match(/([0-9]{4}).*?(?:세미나|설문)/);
+    const sid = m ? (m[1] || m[2]) : null;
+    const isSurvey = desc.includes('설문') || desc.includes('세미나');
+
+    if (!isSurvey && !sid) continue;
+
+    const sKey = sid || `survey_${tx.points}_${tx.day_seq || 1}`;
+    const dt = tx.trans_date;
+
+    if (!dateMap.has(dt)) dateMap.set(dt, new Map());
+    const daySems = dateMap.get(dt);
+
+    if (!daySems.has(sKey)) {
+      daySems.set(sKey, {
+        sid: sid || '',
+        title: sid && SEMINAR_TITLES[sid] ? SEMINAR_TITLES[sid] : (tx.displayTitle || '').replace(/^[📘🎯📝]\s*/, ''),
+        date: dt,
+        pointsByAccount: {},
+        totalPoints: 0,
+        surveyAnswers: {},
+        isDeepSurvey: tx.points >= 2000,
+        status: '완료'
+      });
+    }
+
+    const item = daySems.get(sKey);
+    item.pointsByAccount[tx.account_name] = (item.pointsByAccount[tx.account_name] || 0) + tx.points;
+    item.totalPoints += tx.points;
+    if (tx.points >= 2000) item.isDeepSurvey = true;
+  }
+
+  // 2. Attach subjective answers from surveyRecords
+  for (const sRec of (state.surveyRecords || [])) {
+    const sDate = sRec.seminar_date || (sRec.submitted_at ? sRec.submitted_at.slice(0, 10) : '');
+    if (!sDate.startsWith(targetMonth)) continue;
+    if (state.account !== 'all' && sRec.account_name !== state.account) continue;
+
+    if (!dateMap.has(sDate)) dateMap.set(sDate, new Map());
+    const daySems = dateMap.get(sDate);
+
+    const sid = sRec.seminar_id || '';
+    let matchedItem = null;
+    if (sid && daySems.has(sid)) {
+      matchedItem = daySems.get(sid);
+    } else {
+      for (const it of daySems.values()) {
+        if (sid && it.sid === sid) { matchedItem = it; break; }
+        if (sRec.seminar_title && it.title.includes(sRec.seminar_title.slice(0, 15))) { matchedItem = it; break; }
+      }
+    }
+
+    if (!matchedItem) {
+      matchedItem = {
+        sid: sid,
+        title: sRec.seminar_title || (sid && SEMINAR_TITLES[sid]) || '라이브 세미나 심화설문',
+        date: sDate,
+        pointsByAccount: {},
+        totalPoints: sRec.points_awarded || 0,
+        surveyAnswers: {},
+        isDeepSurvey: true,
+        status: '완료'
+      };
+      daySems.set(sid || `rec_${sRec.id}`, matchedItem);
+    }
+
+    if (!matchedItem.surveyAnswers[sRec.account_name]) {
+      matchedItem.surveyAnswers[sRec.account_name] = {
+        question: sRec.question,
+        answer: sRec.subjective_answer,
+        charCount: sRec.char_count || sRec.subjective_answer.length,
+        submittedAt: sRec.submitted_at
+      };
+    }
+  }
+
+  // 3. Attach upcoming/scheduled seminars from seminarsMaster if in this month
+  for (const sMaster of (state.seminarsMaster || [])) {
+    const mDate = sMaster.seminar_date || '';
+    if (!mDate.startsWith(targetMonth)) continue;
+    if (!dateMap.has(mDate)) dateMap.set(mDate, new Map());
+    const daySems = dateMap.get(mDate);
+    const sid = sMaster.seminar_id;
+    if (sid && !daySems.has(sid)) {
+      daySems.set(sid, {
+        sid: sid,
+        title: sMaster.title,
+        date: mDate,
+        timeRange: sMaster.time_range || '19:00 ~ 20:00',
+        pointsByAccount: {},
+        totalPoints: 0,
+        surveyAnswers: {},
+        isDeepSurvey: false,
+        status: sMaster.status || '예정'
+      });
+    }
+  }
+
+  return dateMap;
+}
+
+function renderSeminarArchive() {
+  populateSeminarMonthDropdown();
+  const targetMonth = state.selectedSeminarMonth || '2026-09';
+  const dateMap = getAggregatedSeminarData(targetMonth);
+
+  // Compute monthly KPI
+  let totalSemCount = 0;
+  let totalSemPoints = 0;
+  let totalSurveysCount = 0;
+
+  for (const daySems of dateMap.values()) {
+    for (const sem of daySems.values()) {
+      totalSemCount++;
+      totalSemPoints += sem.totalPoints;
+      totalSurveysCount += Object.keys(sem.surveyAnswers).length;
+    }
+  }
+
+  const kpiCountEl = document.getElementById('seminarKpiCount');
+  const kpiPointsEl = document.getElementById('seminarKpiPoints');
+  const kpiSurveysEl = document.getElementById('seminarKpiSurveys');
+  if (kpiCountEl) kpiCountEl.innerText = `${totalSemCount}건`;
+  if (kpiPointsEl) kpiPointsEl.innerText = `+${totalSemPoints.toLocaleString()} P`;
+  if (kpiSurveysEl) kpiSurveysEl.innerText = `${totalSurveysCount}건`;
+
+  // Sub-views visibility
+  const calView = document.getElementById('seminarCalendarContainer');
+  const timeView = document.getElementById('seminarTimelineContainer');
+
+  if (state.seminarViewMode === 'monthly') {
+    if (calView) calView.classList.remove('hidden');
+    if (timeView) timeView.classList.add('hidden');
+    renderMonthlyCalendar(targetMonth, dateMap);
+  } else {
+    if (calView) calView.classList.add('hidden');
+    if (timeView) timeView.classList.remove('hidden');
+    renderDailyTimeline(targetMonth, dateMap);
+  }
+}
+
+function renderMonthlyCalendar(targetMonth, dateMap) {
+  const grid = document.getElementById('calendarDaysGrid');
+  const titleEl = document.getElementById('calendarMonthTitle');
+  if (!grid) return;
+
+  const [yearStr, monthStr] = targetMonth.split('-');
+  const year = parseInt(yearStr, 10);
+  const month = parseInt(monthStr, 10);
+  if (titleEl) titleEl.innerHTML = `<span>📅</span> ${year}년 ${month}월 세미나 달력`;
+
+  grid.innerHTML = '';
+
+  const firstDay = new Date(year, month - 1, 1).getDay();
+  const totalDays = new Date(year, month, 0).getDate();
+  const todayStr = new Date().toISOString().slice(0, 10);
+
+  for (let i = 0; i < firstDay; i++) {
+    const emptyCell = document.createElement('div');
+    emptyCell.className = "h-20 bg-slate-50/50 rounded-lg border border-slate-100/50";
+    grid.appendChild(emptyCell);
+  }
+
+  for (let day = 1; day <= totalDays; day++) {
+    const dayStr = String(day).padStart(2, '0');
+    const fullDate = `${targetMonth}-${dayStr}`;
+    const daySems = dateMap.get(fullDate);
+    const hasSems = daySems && daySems.size > 0;
+    const isToday = fullDate === todayStr;
+
+    const cell = document.createElement('div');
+    cell.className = `h-20 p-1 rounded-lg border flex flex-col justify-between transition-all cursor-pointer ${
+      hasSems 
+        ? 'bg-blue-50/70 border-blue-200 hover:border-blue-400 hover:shadow-xs' 
+        : isToday 
+          ? 'bg-emerald-50/40 border-emerald-300' 
+          : 'bg-white border-slate-100 hover:bg-slate-50'
+    }`;
+
+    let topHtml = `<div class="flex items-center justify-between"><span class="text-[10px] font-bold ${
+      isToday ? 'text-emerald-700 bg-emerald-100 px-1 rounded' : 'text-slate-600'
+    }">${day}</span>`;
+    if (hasSems) {
+      topHtml += `<span class="text-[9px] font-bold text-blue-600">${daySems.size}건</span>`;
+    }
+    topHtml += `</div>`;
+
+    let badgesHtml = '<div class="space-y-0.5 overflow-hidden">';
+    if (hasSems) {
+      let count = 0;
+      for (const sem of daySems.values()) {
+        if (count >= 2) {
+          badgesHtml += `<div class="text-[8px] font-bold text-slate-400 text-center leading-none">+${daySems.size - 2}건 더보기</div>`;
+          break;
+        }
+        const ptsText = sem.totalPoints > 0 ? `+${(sem.totalPoints / 1000).toFixed(0)}k` : '예정';
+        const badgeColor = sem.isDeepSurvey 
+          ? 'bg-amber-500 text-white' 
+          : sem.status === '예정' 
+            ? 'bg-blue-500 text-white' 
+            : 'bg-emerald-600 text-white';
+
+        badgesHtml += `
+          <div class="text-[8px] font-semibold truncate rounded px-1 py-0.2 ${badgeColor} leading-tight" title="${sem.title}">
+            ${sem.sid ? `${sem.sid} ` : ''}${ptsText}
+          </div>
+        `;
+        count++;
+      }
+    }
+    badgesHtml += '</div>';
+
+    cell.innerHTML = topHtml + badgesHtml;
+
+    cell.addEventListener('click', () => {
+      state.selectedDailyDate = fullDate;
+      state.seminarViewMode = 'daily';
+      syncSubModeButtons();
+      renderSeminarArchive();
+    });
+
+    grid.appendChild(cell);
+  }
+}
+
+function renderDailyTimeline(targetMonth, dateMap) {
+  const container = document.getElementById('seminarTimelineContainer');
+  if (!container) return;
+
+  container.innerHTML = '';
+
+  const sortedDates = Array.from(dateMap.keys()).sort().reverse();
+  const filterDate = state.selectedDailyDate;
+  const datesToShow = filterDate ? [filterDate] : sortedDates;
+
+  if (filterDate) {
+    const banner = document.createElement('div');
+    banner.className = "flex items-center justify-between bg-blue-50 p-2.5 rounded-xl border border-blue-200 text-xs";
+    banner.innerHTML = `
+      <span class="font-bold text-blue-800">📌 선택된 날짜: ${filterDate}</span>
+      <button id="btnShowAllDates" class="font-bold text-blue-600 hover:underline">전체 날짜 보기</button>
+    `;
+    container.appendChild(banner);
+    banner.querySelector('#btnShowAllDates').addEventListener('click', () => {
+      state.selectedDailyDate = null;
+      renderDailyTimeline(targetMonth, dateMap);
+    });
+  }
+
+  if (datesToShow.length === 0) {
+    container.innerHTML = `
+      <div class="py-12 text-center text-slate-400">
+        <div class="text-3xl mb-2">🔍</div>
+        <p class="text-xs font-semibold">선택하신 조건에 등록된 세미나 내역이 없습니다.</p>
+      </div>
+    `;
+    return;
+  }
+
+  for (const dt of datesToShow) {
+    const daySems = dateMap.get(dt);
+    if (!daySems || daySems.size === 0) continue;
+
+    let dayTotalPts = 0;
+    for (const s of daySems.values()) dayTotalPts += s.totalPoints;
+
+    const dayCard = document.createElement('div');
+    dayCard.className = "bg-white rounded-2xl p-4 card-shadow border border-slate-100 space-y-3";
+
+    const dayHeader = `
+      <div class="flex items-center justify-between pb-2 border-b border-slate-100">
+        <div class="flex items-center gap-2">
+          <span class="text-base">📅</span>
+          <h4 class="text-xs font-bold text-slate-900">${dt}</h4>
+          <span class="text-[10px] text-slate-400">총 ${daySems.size}건</span>
+        </div>
+        ${dayTotalPts > 0 ? `<span class="text-xs font-black text-emerald-600">+${dayTotalPts.toLocaleString()} P</span>` : '<span class="text-[10px] font-bold text-blue-600 bg-blue-50 px-2 py-0.5 rounded">예정 일정</span>'}
+      </div>
+    `;
+
+    let itemsHtml = '<div class="space-y-3">';
+    for (const sem of daySems.values()) {
+      const hasSurveyAnswers = Object.keys(sem.surveyAnswers).length > 0;
+      const ptsBadgeColor = sem.isDeepSurvey ? 'bg-amber-100 text-amber-800' : (sem.totalPoints > 0 ? 'bg-emerald-100 text-emerald-800' : 'bg-blue-100 text-blue-800');
+      const ptsLabel = sem.isDeepSurvey ? `🎯 +${sem.totalPoints.toLocaleString()}P (심화)` : (sem.totalPoints > 0 ? `📝 +${sem.totalPoints.toLocaleString()}P` : '🔵 방송 예정');
+
+      itemsHtml += `
+        <div class="bg-slate-50/70 p-3 rounded-xl border border-slate-200/70 space-y-2">
+          <div class="flex items-start justify-between gap-2">
+            <div class="min-w-0 flex-1">
+              <div class="flex items-center gap-1.5 mb-1">
+                ${sem.sid ? `<span class="text-[10px] font-bold font-mono px-1.5 py-0.5 rounded bg-slate-200 text-slate-700">ID: ${sem.sid}</span>` : ''}
+                <span class="text-[10px] font-bold px-1.5 py-0.5 rounded ${ptsBadgeColor}">${ptsLabel}</span>
+              </div>
+              <h5 class="text-xs font-bold text-slate-800 leading-snug break-keep">${sem.title}</h5>
+            </div>
+          </div>
+
+          ${Object.keys(sem.pointsByAccount).length > 0 ? `
+            <div class="flex items-center gap-2 text-[10px] text-slate-500 pt-1 border-t border-slate-200/50">
+              <span>계정별 적립:</span>
+              ${Object.entries(sem.pointsByAccount).map(([acc, pts]) => `
+                <span class="font-medium text-slate-700"><strong>${acc}</strong>: +${pts.toLocaleString()}P</span>
+              `).join(' · ')}
+            </div>
+          ` : ''}
+
+          ${hasSurveyAnswers ? `
+            <div class="pt-1.5">
+              <button class="toggle-subjective-btn w-full py-1.5 px-2.5 rounded-lg bg-white border border-slate-200 text-[11px] font-bold text-slate-700 flex items-center justify-between hover:bg-slate-50 transition-all">
+                <span class="flex items-center gap-1.5">
+                  <span>✍️</span> AI 심화설문 주관식 작성 내역
+                  <span class="text-[10px] font-normal text-slate-400">(${Object.keys(sem.surveyAnswers).join(', ')})</span>
+                </span>
+                <span class="accordion-arrow text-slate-400 transition-transform">▼</span>
+              </button>
+              <div class="subjective-content hidden mt-2 space-y-2 text-xs">
+                ${Object.entries(sem.surveyAnswers).map(([acc, ansObj]) => `
+                  <div class="bg-white p-2.5 rounded-lg border border-slate-200 space-y-1">
+                    <div class="flex items-center justify-between">
+                      <span class="font-bold text-slate-800 flex items-center gap-1">
+                        ${acc === '박범준' ? '👨‍⚕️' : '👩‍⚕️'} ${acc}님
+                      </span>
+                      <span class="text-[10px] text-slate-400">${ansObj.charCount}자 작성</span>
+                    </div>
+                    ${ansObj.question ? `<p class="text-[10px] text-slate-500 font-medium">Q. ${ansObj.question}</p>` : ''}
+                    <div class="p-2 bg-slate-50 rounded text-slate-700 leading-relaxed font-sans text-[11px] border border-slate-100">
+                      "${ansObj.answer}"
+                    </div>
+                  </div>
+                `).join('')}
+              </div>
+            </div>
+          ` : ''}
+        </div>
+      `;
+    }
+    itemsHtml += '</div>';
+
+    dayCard.innerHTML = dayHeader + itemsHtml;
+
+    dayCard.querySelectorAll('.toggle-subjective-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const content = btn.nextElementSibling;
+        const arrow = btn.querySelector('.accordion-arrow');
+        if (content.classList.contains('hidden')) {
+          content.classList.remove('hidden');
+          arrow.style.transform = 'rotate(180deg)';
+        } else {
+          content.classList.add('hidden');
+          arrow.style.transform = 'rotate(0deg)';
+        }
+      });
+    });
+
+    container.appendChild(dayCard);
+  }
+}
+
+function syncSubModeButtons() {
+  const mBtn = document.getElementById('seminarModeMonth');
+  const dBtn = document.getElementById('seminarModeDaily');
+  if (state.seminarViewMode === 'monthly') {
+    if (mBtn) mBtn.className = "px-2.5 py-1 text-xs font-bold rounded-lg bg-white text-blue-600 shadow-xs transition-all";
+    if (dBtn) dBtn.className = "px-2.5 py-1 text-xs font-bold rounded-lg text-slate-500 hover:text-slate-800 transition-all";
+  } else {
+    if (mBtn) mBtn.className = "px-2.5 py-1 text-xs font-bold rounded-lg text-slate-500 hover:text-slate-800 transition-all";
+    if (dBtn) dBtn.className = "px-2.5 py-1 text-xs font-bold rounded-lg bg-white text-blue-600 shadow-xs transition-all";
+  }
+}
+
 
 // 1. Render Account & KPI Cards
 function renderKPICards() {
@@ -970,6 +1412,51 @@ export function setupEventHandlers() {
       renderFilteredList();
     });
   });
+
+  // Main Tab Switching (Points vs Seminars)
+  const tabPointsBtn = document.getElementById('mainTabPoints');
+  const tabSeminarsBtn = document.getElementById('mainTabSeminars');
+  if (tabPointsBtn && tabSeminarsBtn) {
+    tabPointsBtn.addEventListener('click', () => {
+      state.currentMainTab = 'points';
+      tabPointsBtn.className = "main-mode-tab flex-1 py-2 text-xs font-bold rounded-lg bg-white text-blue-600 shadow-sm transition-all flex items-center justify-center gap-1.5";
+      tabSeminarsBtn.className = "main-mode-tab flex-1 py-2 text-xs font-bold rounded-lg text-slate-500 hover:text-slate-800 transition-all flex items-center justify-center gap-1.5";
+      renderApp();
+    });
+
+    tabSeminarsBtn.addEventListener('click', () => {
+      state.currentMainTab = 'seminars';
+      tabSeminarsBtn.className = "main-mode-tab flex-1 py-2 text-xs font-bold rounded-lg bg-white text-blue-600 shadow-sm transition-all flex items-center justify-center gap-1.5";
+      tabPointsBtn.className = "main-mode-tab flex-1 py-2 text-xs font-bold rounded-lg text-slate-500 hover:text-slate-800 transition-all flex items-center justify-center gap-1.5";
+      renderApp();
+    });
+  }
+
+  // Seminar Sub-mode Switching (Monthly vs Daily)
+  const semMonthBtn = document.getElementById('seminarModeMonth');
+  const semDailyBtn = document.getElementById('seminarModeDaily');
+  if (semMonthBtn && semDailyBtn) {
+    semMonthBtn.addEventListener('click', () => {
+      state.seminarViewMode = 'monthly';
+      syncSubModeButtons();
+      renderSeminarArchive();
+    });
+    semDailyBtn.addEventListener('click', () => {
+      state.seminarViewMode = 'daily';
+      syncSubModeButtons();
+      renderSeminarArchive();
+    });
+  }
+
+  // Seminar Month Dropdown Selector
+  const semMonthSelect = document.getElementById('seminarMonthSelect');
+  if (semMonthSelect) {
+    semMonthSelect.addEventListener('change', (e) => {
+      state.selectedSeminarMonth = e.target.value;
+      state.selectedDailyDate = null;
+      renderSeminarArchive();
+    });
+  }
 
   // Category Quick Clear
   const clearCatBtn = document.getElementById('clearCategoriesBtn');
