@@ -706,7 +706,7 @@ export function loadTransactions(force = false) {
       const seen = new Set();
       const dedupedRows = [];
       for (const row of allRows) {
-        const key = row.tx_hash || `${row.account_name}_${row.trans_date}_${row.description}_${row.points}`;
+        const key = row.tx_hash || `${row.account_name}_${row.trans_date}_${row.service_type || ''}_${row.description}_${row.points}_${row.day_seq || 1}`;
         if (!seen.has(key)) {
           seen.add(key);
           dedupedRows.push(row);
