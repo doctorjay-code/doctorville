@@ -741,6 +741,7 @@ function getAggregatedSeminarData(targetMonth) {
         eventDate: eventDate,
         payoutDate: tx.trans_date, // 실제 포인트 입금일
         pointsByAccount: {},
+        pendingAccounts: {},
         totalPoints: 0,
         surveyAnswers: {},
         isDeepSurvey: tx.points >= 2000 || (sid && globalSurveyMap.has(sid)),
@@ -780,37 +781,52 @@ function getAggregatedSeminarData(targetMonth) {
     if (state.account !== 'all' && sRec.account_name !== state.account) continue;
 
     const sid = sRec.seminar_id || '';
+    const cleanRecTitle = (sRec.seminar_title && !sRec.seminar_title.includes('만족도') && !sRec.seminar_title.includes('양식 폼')) ? sRec.seminar_title.trim() : '';
 
-    // 이미 transactions(1단계)에서 해당 세미나(sid)가 입금 완료로 등록되었는지 검사
+    // 이미 transactions(1단계)에서 해당 세미나가 입금 완료로 등록되었는지 검사
     let alreadySettled = false;
     for (const dSems of dateMap.values()) {
       if (sid && dSems.has(sid) && dSems.get(sid).isSettled) {
         alreadySettled = true;
         break;
       }
+      if (cleanRecTitle) {
+        for (const existing of dSems.values()) {
+          if (existing.isSettled && existing.title && existing.title.trim() === cleanRecTitle) {
+            alreadySettled = true;
+            break;
+          }
+        }
+      }
+      if (alreadySettled) break;
     }
     if (alreadySettled) continue;
 
     if (!dateMap.has(sDate)) dateMap.set(sDate, new Map());
     const daySems = dateMap.get(sDate);
 
-    const sKey = sid || `rec_${sRec.id}`;
+    // ★ 동일 세미나는 무조건 단 1개 카드로 그룹핑 (sid 우선, 없으면 제목 기준)
+    const sKey = sid || (cleanRecTitle ? `title_${cleanRecTitle}` : `rec_${sRec.id}`);
     let matchedItem = daySems.get(sKey);
     if (!matchedItem) {
-      const recTitle = (sRec.seminar_title && !sRec.seminar_title.includes('만족도') && !sRec.seminar_title.includes('양식 폼')) ? sRec.seminar_title : '';
       matchedItem = {
         sid: sid,
-        title: recTitle || (sid && SEMINAR_TITLES[sid]) || '라이브 세미나 심화설문',
+        title: cleanRecTitle || (sid && SEMINAR_TITLES[sid]) || '라이브 세미나 심화설문',
         eventDate: sDate,
         payoutDate: null,
         pointsByAccount: {},
-        totalPoints: sRec.points_awarded || 9000,
+        pendingAccounts: {}, // 계정별 참여 기록 (금액 없음)
+        totalPoints: 0, // 포인트 금액 일체 표기 안 함
         surveyAnswers: {},
         isDeepSurvey: true,
         isSettled: false, // 지급 대기 플래그
         status: '지급 예정'
       };
       daySems.set(sKey, matchedItem);
+    }
+
+    if (sRec.account_name) {
+      matchedItem.pendingAccounts[sRec.account_name] = true;
     }
 
     if (!matchedItem.surveyAnswers[sRec.account_name]) {
@@ -950,8 +966,9 @@ function renderMonthlyCalendar(targetMonth, dateMap) {
         if (sem.isSettled) {
           ptsText = `+${(sem.totalPoints / 1000).toFixed(0)}k`;
           badgeColor = sem.isDeepSurvey ? 'bg-amber-500 text-white' : 'bg-emerald-600 text-white';
-        } else if (sem.status === '지급 예정' || sem.totalPoints > 0) {
-          ptsText = `⏳${(sem.totalPoints / 1000).toFixed(0)}k(예정)`;
+        } else if (sem.status === '지급 예정') {
+          const accs = Object.keys(sem.pendingAccounts || {}).map(formatAccountName).join('/');
+          ptsText = accs ? `⏳[${accs}]예정` : '⏳예정';
           badgeColor = 'bg-amber-600 text-white border border-amber-400';
         } else {
           ptsText = '예정';
@@ -1047,33 +1064,61 @@ function renderDailyTimeline(targetMonth, dateMap) {
           <h4 class="text-xs font-bold text-slate-900">${dt}</h4>
           <span class="text-[10px] text-slate-400">총 ${daySems.size}건</span>
         </div>
-        ${dayTotalPts > 0 ? `<span class="text-xs font-black text-emerald-600">+${dayTotalPts.toLocaleString()} P</span>` : '<span class="text-[10px] font-bold text-blue-600 bg-blue-50 px-2 py-0.5 rounded">예정 일정</span>'}
+        ${dayTotalPts > 0 ? `<span class="text-xs font-black text-emerald-600">+${dayTotalPts.toLocaleString()} P</span>` : '<span class="text-[10px] font-bold text-amber-700 bg-amber-50 px-2 py-0.5 rounded border border-amber-200">지급 대기 중</span>'}
       </div>
     `;
 
     let itemsHtml = '<div class="space-y-3">';
     for (const sem of daySems.values()) {
       const hasSurveyAnswers = Object.keys(sem.surveyAnswers).length > 0;
-      let ptsBadgeColor = '';
-      let ptsLabel = '';
+
+      // 상단 상태 뱃지: 사람별(BJ / JH) 초록색/노란색 분리 표시 (지급 예정엔 포인트 미표기)
+      let badgesMarkup = '';
       if (sem.isSettled) {
-        ptsBadgeColor = sem.isDeepSurvey ? 'bg-emerald-100 text-emerald-900 border border-emerald-300' : 'bg-emerald-50 text-emerald-800';
-        ptsLabel = `✅ +${sem.totalPoints.toLocaleString()}P (정산 완료)`;
-      } else if (sem.status === '지급 예정' || sem.totalPoints > 0) {
-        ptsBadgeColor = 'bg-amber-100 text-amber-900 border border-amber-300';
-        ptsLabel = `⏳ +${sem.totalPoints.toLocaleString()}P (지급 예정)`;
+        const entries = Object.entries(sem.pointsByAccount || {});
+        if (entries.length > 0) {
+          badgesMarkup = entries.map(([acc, pts]) => `
+            <span class="text-[10px] font-bold px-2 py-0.5 rounded-lg bg-emerald-100 text-emerald-900 border border-emerald-300 shadow-2xs">
+              +${pts.toLocaleString()}P (${formatAccountName(acc)})
+            </span>
+          `).join(' ');
+        } else {
+          badgesMarkup = `
+            <span class="text-[10px] font-bold px-2 py-0.5 rounded-lg bg-emerald-100 text-emerald-900 border border-emerald-300 shadow-2xs">
+              +${sem.totalPoints.toLocaleString()}P
+            </span>
+          `;
+        }
+      } else if (sem.status === '지급 예정') {
+        const pendingAccs = Object.keys(sem.pendingAccounts || {});
+        if (pendingAccs.length > 0) {
+          badgesMarkup = pendingAccs.map(acc => `
+            <span class="text-[10px] font-bold px-2 py-0.5 rounded-lg bg-amber-100 text-amber-900 border border-amber-300 shadow-2xs">
+              ⏳ 지급 예정 (${formatAccountName(acc)})
+            </span>
+          `).join(' ');
+        } else {
+          badgesMarkup = `
+            <span class="text-[10px] font-bold px-2 py-0.5 rounded-lg bg-amber-100 text-amber-900 border border-amber-300 shadow-2xs">
+              ⏳ 지급 예정
+            </span>
+          `;
+        }
       } else {
-        ptsBadgeColor = 'bg-blue-100 text-blue-800';
-        ptsLabel = '🔵 방송 예정';
+        badgesMarkup = `
+          <span class="text-[10px] font-bold px-2 py-0.5 rounded-lg bg-blue-100 text-blue-800 border border-blue-200">
+            🔵 방송 예정
+          </span>
+        `;
       }
 
       itemsHtml += `
         <div class="bg-slate-50/70 p-3 rounded-xl border border-slate-200/70 space-y-2">
           <div class="flex items-start justify-between gap-2">
             <div class="min-w-0 flex-1">
-              <div class="flex items-center gap-1.5 mb-1">
+              <div class="flex flex-wrap items-center gap-1.5 mb-1.5">
                 ${sem.sid ? `<span class="text-[10px] font-bold font-mono px-1.5 py-0.5 rounded bg-slate-200 text-slate-700">ID: ${sem.sid}</span>` : ''}
-                <span class="text-[10px] font-bold px-1.5 py-0.5 rounded ${ptsBadgeColor}">${ptsLabel}</span>
+                ${badgesMarkup}
               </div>
               <h5 class="text-xs font-bold text-slate-800 leading-snug break-keep">${sem.title}</h5>
             </div>
@@ -1091,7 +1136,7 @@ function renderDailyTimeline(targetMonth, dateMap) {
             `}
             ${Object.keys(sem.pointsByAccount).length > 0 ? `
               <span class="text-slate-300">|</span>
-              <span>계정별 적립:</span>
+              <span>계정별 확정 입금:</span>
               ${Object.entries(sem.pointsByAccount).map(([acc, pts]) => `
                 <span class="font-medium text-slate-700"><strong>${formatAccountName(acc)}</strong>: +${pts.toLocaleString()}P</span>
               `).join(' · ')}
