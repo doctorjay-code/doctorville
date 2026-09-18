@@ -632,17 +632,24 @@ function populateSeminarMonthDropdown() {
   if (!selectEl) return;
 
   const monthSet = new Set();
-  // Gather from transactions, surveyRecords, and current month
   const nowYM = new Date().toISOString().slice(0, 7);
   monthSet.add(nowYM);
 
   state.transactions.forEach(r => {
     if (r.trans_date && (r.description.includes('설문') || r.description.includes('세미나'))) {
-      monthSet.add(r.trans_date.slice(0, 7));
+      const desc = r.description || '';
+      const mDate = desc.match(/([0-9]{1,2})\/([0-9]{1,2})\s*설문/);
+      if (mDate) {
+        const y = r.trans_date.slice(0, 4);
+        const m = String(mDate[1]).padStart(2, '0');
+        monthSet.add(`${y}-${m}`);
+      } else {
+        monthSet.add(r.trans_date.slice(0, 7));
+      }
     }
   });
   (state.surveyRecords || []).forEach(r => {
-    const d = r.seminar_date || (r.submitted_at ? r.submitted_at.slice(0, 7) : '');
+    const d = r.seminar_date || (r.submitted_at ? r.submitted_at.slice(0, 10) : '');
     if (d) monthSet.add(d.slice(0, 7));
   });
 
@@ -658,7 +665,7 @@ function populateSeminarMonthDropdown() {
 function getAggregatedSeminarData(targetMonth) {
   const dateMap = new Map();
 
-  // 0. Build global survey answers lookup map by seminar_id
+  // 0. Build global lookup maps
   const globalSurveyMap = new Map();
   for (const sRec of (state.surveyRecords || [])) {
     const sid = sRec.seminar_id;
@@ -668,9 +675,37 @@ function getAggregatedSeminarData(targetMonth) {
     }
   }
 
-  // 1. Gather from transactions (actual earned points)
+  const globalMasterMap = new Map();
+  for (const sMaster of (state.seminarsMaster || [])) {
+    if (sMaster.seminar_id) {
+      globalMasterMap.set(sMaster.seminar_id, sMaster);
+    }
+  }
+
+  // 헬퍼: 거래 내역에서 실제 세미나/설문 진행 날짜(Event Date) 도출
+  function extractEventDateFromTx(tx, sid) {
+    const desc = tx.description || '';
+    const mDate = desc.match(/([0-9]{1,2})\/([0-9]{1,2})\s*설문/);
+    if (mDate) {
+      const year = tx.trans_date ? tx.trans_date.slice(0, 4) : '2026';
+      const mm = String(mDate[1]).padStart(2, '0');
+      const dd = String(mDate[2]).padStart(2, '0');
+      return `${year}-${mm}-${dd}`;
+    }
+    if (sid && globalSurveyMap.has(sid)) {
+      const first = globalSurveyMap.get(sid)[0];
+      const sDate = first.seminar_date || (first.submitted_at ? first.submitted_at.slice(0, 10) : '');
+      if (sDate) return sDate;
+    }
+    if (sid && globalMasterMap.has(sid)) {
+      const sMaster = globalMasterMap.get(sid);
+      if (sMaster.seminar_date) return sMaster.seminar_date;
+    }
+    return tx.trans_date;
+  }
+
+  // 1. 거래 내역 기반 집계 (실제 입금 완료된 세미나)
   for (const tx of state.transactions) {
-    if (!tx.trans_date.startsWith(targetMonth)) continue;
     if (state.account !== 'all' && tx.account_name !== state.account) continue;
 
     const desc = tx.description || '';
@@ -686,11 +721,14 @@ function getAggregatedSeminarData(targetMonth) {
       continue;
     }
 
-    const sKey = sid || `survey_${tx.points}_${tx.day_seq || 1}`;
-    const dt = tx.trans_date;
+    // 실제 세미나 진행일 산출 및 타겟 월 필터링
+    const eventDate = extractEventDateFromTx(tx, sid);
+    if (!eventDate.startsWith(targetMonth)) continue;
 
-    if (!dateMap.has(dt)) dateMap.set(dt, new Map());
-    const daySems = dateMap.get(dt);
+    const sKey = sid || `survey_${tx.points}_${tx.day_seq || 1}`;
+
+    if (!dateMap.has(eventDate)) dateMap.set(eventDate, new Map());
+    const daySems = dateMap.get(eventDate);
 
     if (!daySems.has(sKey)) {
       let tTitle = sid && SEMINAR_TITLES[sid] ? SEMINAR_TITLES[sid] : (tx.displayTitle || '').replace(/^[📘🎯📝]\s*/, '');
@@ -700,12 +738,14 @@ function getAggregatedSeminarData(targetMonth) {
       daySems.set(sKey, {
         sid: sid || '',
         title: tTitle,
-        date: dt,
+        eventDate: eventDate,
+        payoutDate: tx.trans_date, // 실제 포인트 입금일
         pointsByAccount: {},
         totalPoints: 0,
         surveyAnswers: {},
         isDeepSurvey: tx.points >= 2000 || (sid && globalSurveyMap.has(sid)),
-        status: '완료'
+        isSettled: true, // 정산 완료 플래그
+        status: '정산 완료'
       });
     }
 
@@ -713,8 +753,10 @@ function getAggregatedSeminarData(targetMonth) {
     item.pointsByAccount[tx.account_name] = (item.pointsByAccount[tx.account_name] || 0) + tx.points;
     item.totalPoints += tx.points;
     if (tx.points >= 2000 || (sid && globalSurveyMap.has(sid))) item.isDeepSurvey = true;
+    item.isSettled = true;
+    item.payoutDate = tx.trans_date;
 
-    // seminar_id가 일치하는 주관식 설문 내역 자동 결합 (입금일/방송일 무관하게 100% 바인딩)
+    // 주관식 설문 내역 자동 결합
     if (sid && globalSurveyMap.has(sid)) {
       for (const sRec of globalSurveyMap.get(sid)) {
         if (state.account === 'all' || sRec.account_name === state.account) {
@@ -731,7 +773,7 @@ function getAggregatedSeminarData(targetMonth) {
     }
   }
 
-  // 2. Attach subjective answers from surveyRecords for dates where no point transaction exists yet (e.g. 당일 설문 제출 건)
+  // 2. 설문 제출 기록 중 아직 포인트 미입금 건 (정산/지급 대기 중인 세미나)
   for (const sRec of (state.surveyRecords || [])) {
     const sDate = sRec.seminar_date || (sRec.submitted_at ? sRec.submitted_at.slice(0, 10) : '');
     if (!sDate.startsWith(targetMonth)) continue;
@@ -739,33 +781,36 @@ function getAggregatedSeminarData(targetMonth) {
 
     const sid = sRec.seminar_id || '';
 
-    // 이미 이번 달 거래 내역에서 해당 세미나가 표시되었는지 확인
-    let alreadyHandled = false;
+    // 이미 transactions(1단계)에서 해당 세미나(sid)가 입금 완료로 등록되었는지 검사
+    let alreadySettled = false;
     for (const dSems of dateMap.values()) {
-      if (sid && dSems.has(sid)) {
-        alreadyHandled = true;
+      if (sid && dSems.has(sid) && dSems.get(sid).isSettled) {
+        alreadySettled = true;
         break;
       }
     }
-    if (alreadyHandled) continue;
+    if (alreadySettled) continue;
 
     if (!dateMap.has(sDate)) dateMap.set(sDate, new Map());
     const daySems = dateMap.get(sDate);
 
-    let matchedItem = sid && daySems.has(sid) ? daySems.get(sid) : null;
+    const sKey = sid || `rec_${sRec.id}`;
+    let matchedItem = daySems.get(sKey);
     if (!matchedItem) {
       const recTitle = (sRec.seminar_title && !sRec.seminar_title.includes('만족도') && !sRec.seminar_title.includes('양식 폼')) ? sRec.seminar_title : '';
       matchedItem = {
         sid: sid,
         title: recTitle || (sid && SEMINAR_TITLES[sid]) || '라이브 세미나 심화설문',
-        date: sDate,
+        eventDate: sDate,
+        payoutDate: null,
         pointsByAccount: {},
-        totalPoints: sRec.points_awarded || 0,
+        totalPoints: sRec.points_awarded || 9000,
         surveyAnswers: {},
         isDeepSurvey: true,
-        status: '완료'
+        isSettled: false, // 지급 대기 플래그
+        status: '지급 예정'
       };
-      daySems.set(sid || `rec_${sRec.id}`, matchedItem);
+      daySems.set(sKey, matchedItem);
     }
 
     if (!matchedItem.surveyAnswers[sRec.account_name]) {
@@ -778,7 +823,7 @@ function getAggregatedSeminarData(targetMonth) {
     }
   }
 
-  // 3. Attach upcoming/scheduled seminars from seminarsMaster if in this month
+  // 3. 방송 예정 세미나 마스터 결합
   for (const sMaster of (state.seminarsMaster || [])) {
     const mDate = sMaster.seminar_date || '';
     if (!mDate.startsWith(targetMonth)) continue;
@@ -790,13 +835,15 @@ function getAggregatedSeminarData(targetMonth) {
       daySems.set(sid, {
         sid: sid,
         title: mTitle,
-        date: mDate,
+        eventDate: mDate,
+        payoutDate: null,
         timeRange: sMaster.time_range || '19:00 ~ 20:00',
         pointsByAccount: {},
         totalPoints: 0,
         surveyAnswers: {},
         isDeepSurvey: false,
-        status: sMaster.status || '예정'
+        isSettled: false,
+        status: sMaster.status || '방송 예정'
       });
     }
   }
@@ -898,12 +945,18 @@ function renderMonthlyCalendar(targetMonth, dateMap) {
           badgesHtml += `<div class="text-[8px] font-bold text-slate-400 text-center leading-none">+${daySems.size - 2}건 더보기</div>`;
           break;
         }
-        const ptsText = sem.totalPoints > 0 ? `+${(sem.totalPoints / 1000).toFixed(0)}k` : '예정';
-        const badgeColor = sem.isDeepSurvey 
-          ? 'bg-amber-500 text-white' 
-          : sem.status === '예정' 
-            ? 'bg-blue-500 text-white' 
-            : 'bg-emerald-600 text-white';
+        let ptsText = '';
+        let badgeColor = '';
+        if (sem.isSettled) {
+          ptsText = `+${(sem.totalPoints / 1000).toFixed(0)}k`;
+          badgeColor = sem.isDeepSurvey ? 'bg-amber-500 text-white' : 'bg-emerald-600 text-white';
+        } else if (sem.status === '지급 예정' || sem.totalPoints > 0) {
+          ptsText = `⏳${(sem.totalPoints / 1000).toFixed(0)}k(예정)`;
+          badgeColor = 'bg-amber-600 text-white border border-amber-400';
+        } else {
+          ptsText = '예정';
+          badgeColor = 'bg-blue-500 text-white';
+        }
 
         badgesHtml += `
           <div class="text-[8px] font-semibold truncate rounded px-1 py-0.2 ${badgeColor} leading-tight" title="${sem.title}">
@@ -1001,8 +1054,18 @@ function renderDailyTimeline(targetMonth, dateMap) {
     let itemsHtml = '<div class="space-y-3">';
     for (const sem of daySems.values()) {
       const hasSurveyAnswers = Object.keys(sem.surveyAnswers).length > 0;
-      const ptsBadgeColor = sem.isDeepSurvey ? 'bg-amber-100 text-amber-800' : (sem.totalPoints > 0 ? 'bg-emerald-100 text-emerald-800' : 'bg-blue-100 text-blue-800');
-      const ptsLabel = sem.isDeepSurvey ? `🎯 +${sem.totalPoints.toLocaleString()}P (심화)` : (sem.totalPoints > 0 ? `📝 +${sem.totalPoints.toLocaleString()}P` : '🔵 방송 예정');
+      let ptsBadgeColor = '';
+      let ptsLabel = '';
+      if (sem.isSettled) {
+        ptsBadgeColor = sem.isDeepSurvey ? 'bg-emerald-100 text-emerald-900 border border-emerald-300' : 'bg-emerald-50 text-emerald-800';
+        ptsLabel = `✅ +${sem.totalPoints.toLocaleString()}P (정산 완료)`;
+      } else if (sem.status === '지급 예정' || sem.totalPoints > 0) {
+        ptsBadgeColor = 'bg-amber-100 text-amber-900 border border-amber-300';
+        ptsLabel = `⏳ +${sem.totalPoints.toLocaleString()}P (지급 예정)`;
+      } else {
+        ptsBadgeColor = 'bg-blue-100 text-blue-800';
+        ptsLabel = '🔵 방송 예정';
+      }
 
       itemsHtml += `
         <div class="bg-slate-50/70 p-3 rounded-xl border border-slate-200/70 space-y-2">
@@ -1016,14 +1079,24 @@ function renderDailyTimeline(targetMonth, dateMap) {
             </div>
           </div>
 
-          ${Object.keys(sem.pointsByAccount).length > 0 ? `
-            <div class="flex items-center gap-2 text-[10px] text-slate-500 pt-1 border-t border-slate-200/50">
+          <!-- 일정 및 정산 상세 정보 (진행일 vs 입금일 명확 표기) -->
+          <div class="flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-slate-500 pt-1 border-t border-slate-200/50">
+            <span>📅 <strong>진행일</strong>: ${sem.eventDate}</span>
+            ${sem.isSettled ? `
+              <span class="text-emerald-700 font-semibold">💰 <strong>입금일</strong>: ${sem.payoutDate}</span>
+            ` : sem.status === '지급 예정' ? `
+              <span class="text-amber-700 font-bold">⏳ <strong>정산 상태</strong>: 닥터빌 검수 및 지급 대기 중</span>
+            ` : `
+              <span class="text-blue-600 font-medium">⏱️ <strong>시간</strong>: ${sem.timeRange || '19:00 ~ 20:00'}</span>
+            `}
+            ${Object.keys(sem.pointsByAccount).length > 0 ? `
+              <span class="text-slate-300">|</span>
               <span>계정별 적립:</span>
               ${Object.entries(sem.pointsByAccount).map(([acc, pts]) => `
                 <span class="font-medium text-slate-700"><strong>${formatAccountName(acc)}</strong>: +${pts.toLocaleString()}P</span>
               `).join(' · ')}
-            </div>
-          ` : ''}
+            ` : ''}
+          </div>
 
           ${hasSurveyAnswers ? `
             <div class="pt-1.5">
