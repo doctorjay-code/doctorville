@@ -317,15 +317,32 @@ function cleanSeminarTitle(title) {
   return t || '라이브 세미나';
 }
 
-// Reverse SID lookup by seminar title
+// Reverse SID lookup by seminar title (Blacklists generic phrases to prevent false positives)
+const GENERIC_SEMINAR_PHRASES = [
+  '라이브 세미나', '심화설문', '설문', '세미나', '양식 폼', '웹심포지엄', '웹 심포지엄',
+  'Web Symposium', 'Webinar', 'webinar', '심포지엄', 'Symposium', '라이브 세미나 심화설문'
+];
+
 function findSeminarIdByTitle(title) {
   if (!title) return null;
   const clean = cleanSeminarTitle(title);
-  if (!clean || clean === '라이브 세미나') return null;
+  if (!clean || clean === '라이브 세미나' || clean === '라이브 세미나 심화설문') return null;
 
+  // 1. Exact match
   for (const [sid, fullTitle] of Object.entries(SEMINAR_TITLES)) {
-    if (fullTitle === clean || fullTitle.includes(clean) || clean.includes(fullTitle)) {
-      return sid;
+    if (fullTitle === clean) return sid;
+  }
+
+  // 2. Blacklist generic phrases from substring matching
+  const isGeneric = GENERIC_SEMINAR_PHRASES.some(g => clean.toLowerCase() === g.toLowerCase());
+  if (isGeneric) return null;
+
+  // 3. Substring match only with meaningful, non-generic titles (>= 6 chars)
+  if (clean.length >= 6) {
+    for (const [sid, fullTitle] of Object.entries(SEMINAR_TITLES)) {
+      if (fullTitle.toLowerCase().includes(clean.toLowerCase()) || clean.toLowerCase().includes(fullTitle.toLowerCase())) {
+        return sid;
+      }
     }
   }
   return null;
@@ -877,17 +894,24 @@ function getAggregatedSeminarData(targetMonth) {
     item.isSettled = true;
     item.payoutDate = tx.trans_date;
 
-    // 주관식 설문 내역 자동 결합
+    // 주관식 설문 내역 자동 결합 (복수 문항 완전 지원)
     if (sid && globalSurveyMap.has(sid)) {
       for (const sRec of globalSurveyMap.get(sid)) {
         if (state.account === 'all' || sRec.account_name === state.account) {
-          if (!item.surveyAnswers[sRec.account_name]) {
-            item.surveyAnswers[sRec.account_name] = {
-              question: sRec.question,
-              answer: sRec.subjective_answer,
-              charCount: sRec.char_count || (sRec.subjective_answer ? sRec.subjective_answer.length : 0),
-              submittedAt: sRec.submitted_at
-            };
+          const acc = sRec.account_name;
+          if (acc) {
+            if (!item.surveyAnswers[acc]) item.surveyAnswers[acc] = [];
+            const isDupe = item.surveyAnswers[acc].some(
+              q => q.question === sRec.question && q.answer === sRec.subjective_answer
+            );
+            if (!isDupe) {
+              item.surveyAnswers[acc].push({
+                question: sRec.question,
+                answer: sRec.subjective_answer,
+                charCount: sRec.char_count || (sRec.subjective_answer ? sRec.subjective_answer.length : 0),
+                submittedAt: sRec.submitted_at
+              });
+            }
           }
         }
       }
@@ -900,38 +924,76 @@ function getAggregatedSeminarData(targetMonth) {
     if (!sDate.startsWith(targetMonth)) continue;
     if (state.account !== 'all' && sRec.account_name !== state.account) continue;
 
-    const sid = sRec.seminar_id || '';
-    const cleanRecTitle = (sRec.seminar_title && !sRec.seminar_title.includes('만족도') && !sRec.seminar_title.includes('양식 폼')) ? sRec.seminar_title.trim() : '';
+    let sid = sRec.seminar_id || '';
+    const rawTitle = sRec.seminar_title || '';
+    const cleanRecTitle = (rawTitle && !rawTitle.includes('만족도') && !rawTitle.includes('양식 폼')) ? cleanSeminarTitle(rawTitle) : '';
 
-    // 이미 transactions(1단계)에서 해당 세미나가 입금 완료로 등록되었는지 검사
-    let alreadySettled = false;
+    // SID가 누락된 경우 제목으로 역추적
+    if (!sid && cleanRecTitle) {
+      sid = findSeminarIdByTitle(cleanRecTitle) || '';
+    }
+
+    // 2-1. 이미 transactions(1단계)에서 해당 세미나가 입금 완료로 등록되었는지 전체 날짜 검사
+    let settledItem = null;
     for (const dSems of dateMap.values()) {
       if (sid && dSems.has(sid) && dSems.get(sid).isSettled) {
-        alreadySettled = true;
+        settledItem = dSems.get(sid);
         break;
       }
-      if (cleanRecTitle) {
+      if (cleanRecTitle && cleanRecTitle !== '라이브 세미나' && cleanRecTitle !== '라이브 세미나 심화설문') {
         for (const existing of dSems.values()) {
           if (existing.isSettled && existing.title && existing.title.trim() === cleanRecTitle) {
-            alreadySettled = true;
+            settledItem = existing;
             break;
           }
         }
       }
-      if (alreadySettled) break;
+      if (settledItem) break;
     }
-    if (alreadySettled) continue;
 
+    // 이미 입금 완료된 카드가 존재하면, 주관식 답변만 결합하고 유령 카드 생성 방지!
+    if (settledItem) {
+      const acc = sRec.account_name;
+      if (acc) {
+        if (!settledItem.surveyAnswers[acc]) settledItem.surveyAnswers[acc] = [];
+        const isDupe = settledItem.surveyAnswers[acc].some(
+          q => q.question === sRec.question && q.answer === sRec.subjective_answer
+        );
+        if (!isDupe) {
+          settledItem.surveyAnswers[acc].push({
+            question: sRec.question,
+            answer: sRec.subjective_answer,
+            charCount: sRec.char_count || (sRec.subjective_answer ? sRec.subjective_answer.length : 0),
+            submittedAt: sRec.submitted_at
+          });
+        }
+      }
+      continue;
+    }
+
+    // 2-2. 아직 미입금(지급 예정) 건: 해당 날짜 맵에 그룹핑
     if (!dateMap.has(sDate)) dateMap.set(sDate, new Map());
     const daySems = dateMap.get(sDate);
 
-    // ★ 동일 세미나는 무조건 단 1개 카드로 그룹핑 (sid 우선, 없으면 제목 기준)
-    const sKey = sid || (cleanRecTitle ? `title_${cleanRecTitle}` : `rec_${sRec.id}`);
+    // ★ 동일 세미나는 무조건 단 1개 카드로만 그룹핑 (sid 우선, 없으면 cleanRecTitle, 그래도 없으면 날짜별 단일 fallback)
+    let sKey = sid;
+    if (!sKey) {
+      if (cleanRecTitle && cleanRecTitle !== '라이브 세미나' && cleanRecTitle !== '라이브 세미나 심화설문') {
+        sKey = `title_${cleanRecTitle}`;
+      } else {
+        sKey = `unassigned_${sDate}`;
+      }
+    }
+
     let matchedItem = daySems.get(sKey);
     if (!matchedItem) {
+      let displayTitle = cleanRecTitle;
+      if (!displayTitle || displayTitle === '라이브 세미나' || displayTitle === '라이브 세미나 심화설문') {
+        displayTitle = (sid && SEMINAR_TITLES[sid]) ? SEMINAR_TITLES[sid] : '라이브 세미나 심화설문';
+      }
       matchedItem = {
         sid: sid,
-        title: cleanRecTitle || (sid && SEMINAR_TITLES[sid]) || '라이브 세미나 심화설문',
+        title: displayTitle,
         eventDate: sDate,
         payoutDate: null,
         pointsByAccount: {},
@@ -949,13 +1011,20 @@ function getAggregatedSeminarData(targetMonth) {
       matchedItem.pendingAccounts[sRec.account_name] = true;
     }
 
-    if (!matchedItem.surveyAnswers[sRec.account_name]) {
-      matchedItem.surveyAnswers[sRec.account_name] = {
-        question: sRec.question,
-        answer: sRec.subjective_answer,
-        charCount: sRec.char_count || (sRec.subjective_answer ? sRec.subjective_answer.length : 0),
-        submittedAt: sRec.submitted_at
-      };
+    const acc = sRec.account_name;
+    if (acc) {
+      if (!matchedItem.surveyAnswers[acc]) matchedItem.surveyAnswers[acc] = [];
+      const isDupe = matchedItem.surveyAnswers[acc].some(
+        q => q.question === sRec.question && q.answer === sRec.subjective_answer
+      );
+      if (!isDupe) {
+        matchedItem.surveyAnswers[acc].push({
+          question: sRec.question,
+          answer: sRec.subjective_answer,
+          charCount: sRec.char_count || (sRec.subjective_answer ? sRec.subjective_answer.length : 0),
+          submittedAt: sRec.submitted_at
+        });
+      }
     }
   }
 
@@ -1011,7 +1080,9 @@ function renderSeminarArchive() {
     for (const sem of daySems.values()) {
       totalSemCount++;
       totalSemPoints += sem.totalPoints;
-      totalSurveysCount += Object.keys(sem.surveyAnswers).length;
+      for (const ansVal of Object.values(sem.surveyAnswers)) {
+        totalSurveysCount += Array.isArray(ansVal) ? ansVal.length : 1;
+      }
     }
   }
 
@@ -1335,20 +1406,32 @@ function renderDailyTimeline(targetMonth, dateMap) {
                 <span class="accordion-arrow text-slate-400 transition-transform" style="transform: ${state.allAnswersExpanded ? 'rotate(180deg)' : 'rotate(0deg)'}">▼</span>
               </button>
               <div class="subjective-content ${state.allAnswersExpanded ? '' : 'hidden'} mt-2 space-y-2 text-xs">
-                ${Object.entries(sem.surveyAnswers).map(([acc, ansObj]) => `
-                  <div class="bg-white p-3 rounded-xl border border-slate-200 shadow-2xs space-y-1.5">
-                    <div class="flex items-center justify-between">
-                      <span class="font-bold text-slate-800 flex items-center gap-1">
-                        ${acc === '박범준' ? '👨‍⚕️' : '👩‍⚕️'} <strong class="text-blue-900">${formatAccountName(acc)}님</strong>
-                      </span>
-                      <span class="text-[10px] font-medium text-slate-400 bg-slate-100 px-1.5 py-0.5 rounded">${ansObj.charCount}자 작성</span>
+                ${Object.entries(sem.surveyAnswers).map(([acc, ansVal]) => {
+                  const ansList = Array.isArray(ansVal) ? ansVal : [ansVal];
+                  return `
+                    <div class="bg-white p-3 rounded-xl border border-slate-200 shadow-2xs space-y-2">
+                      <div class="flex items-center justify-between border-b border-slate-100 pb-1.5">
+                        <span class="font-bold text-slate-800 flex items-center gap-1">
+                          ${acc === '박범준' ? '👨‍⚕️' : '👩‍⚕️'} <strong class="text-blue-900">${formatAccountName(acc)}님</strong>
+                        </span>
+                        <span class="text-[10px] font-medium text-slate-400 bg-slate-100 px-1.5 py-0.5 rounded">${ansList.length}개 문항 답변 완료</span>
+                      </div>
+                      ${ansList.map((item, qIdx) => `
+                        <div class="space-y-1.5 ${qIdx > 0 ? 'pt-2.5 border-t border-dashed border-slate-200' : ''}">
+                          <div class="flex items-start justify-between gap-2">
+                            <p class="text-[10.5px] text-slate-700 font-bold bg-slate-50 p-1.5 rounded border border-slate-100 flex-1 leading-snug">
+                              <span class="text-blue-600 font-extrabold mr-1">Q${ansList.length > 1 ? (qIdx + 1) : ''}.</span> ${item.question || '라이브 세미나 심화 설문'}
+                            </p>
+                            <span class="text-[9.5px] font-medium text-slate-400 whitespace-nowrap bg-slate-50 px-1.5 py-0.5 rounded border border-slate-100">${item.charCount}자</span>
+                          </div>
+                          <div class="p-2.5 bg-blue-50/40 rounded-lg text-slate-800 leading-relaxed font-sans text-xs border border-blue-100/60 break-keep">
+                            "${item.answer}"
+                          </div>
+                        </div>
+                      `).join('')}
                     </div>
-                    ${ansObj.question ? `<p class="text-[10px] text-slate-600 font-bold bg-slate-50 p-1.5 rounded border border-slate-100">Q. ${ansObj.question}</p>` : ''}
-                    <div class="p-2.5 bg-blue-50/40 rounded-lg text-slate-800 leading-relaxed font-sans text-xs border border-blue-100/60 break-keep">
-                      "${ansObj.answer}"
-                    </div>
-                  </div>
-                `).join('')}
+                  `;
+                }).join('')}
               </div>
             </div>
           ` : ''}
