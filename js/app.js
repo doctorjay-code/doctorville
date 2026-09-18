@@ -872,7 +872,10 @@ function getAggregatedSeminarData(targetMonth) {
     if (!dateMap.has(bDate)) dateMap.set(bDate, new Map());
     const daySems = dateMap.get(bDate);
 
-    const hasSurvey = globalSurveyMap.has(sid);
+    const surveyList = globalSurveyMap.get(sid) || [];
+    const hasSurvey = surveyList.length > 0;
+    // 100자 이상 주관식 답변이 1개 이상 있어야 정식 심화설문으로 인정
+    const hasDeepSurvey = surveyList.some(r => (r.char_count || (r.subjective_answer ? r.subjective_answer.length : 0)) >= 100);
     const hasDeepPayout = deepPayoutMap.has(sid);
 
     let categoryStatus = 'upcoming';
@@ -881,9 +884,9 @@ function getAggregatedSeminarData(targetMonth) {
     const deepPointsByAccount = {};
     const surveyAnswers = {};
 
-    // Collect survey answers
+    // Collect survey answers (including < 100 chars so they show in daily detail)
     if (hasSurvey) {
-      for (const sRec of globalSurveyMap.get(sid)) {
+      for (const sRec of surveyList) {
         if (state.account === 'all' || sRec.account_name === state.account) {
           const acc = sRec.account_name;
           if (!surveyAnswers[acc]) surveyAnswers[acc] = [];
@@ -898,7 +901,7 @@ function getAggregatedSeminarData(targetMonth) {
     }
 
     // Determine basic points (1000P on eventDate)
-    const isFreeSeminar = title.includes('Global Journal') || title.includes('무료') || (bDate <= todayStr && !hasSurvey && !hasDeepPayout && (!basicAttendanceMap.has(bDate) || Object.keys(basicAttendanceMap.get(bDate)).length === 0));
+    const isFreeSeminar = title.includes('Global Journal') || title.includes('무료') || (bDate <= todayStr && !hasDeepSurvey && !hasDeepPayout && (!basicAttendanceMap.has(bDate) || Object.keys(basicAttendanceMap.get(bDate)).length === 0));
 
     if (bDate <= todayStr && !isFreeSeminar) {
       if (state.account === 'all') {
@@ -920,23 +923,21 @@ function getAggregatedSeminarData(targetMonth) {
       }
     }
 
-    // Determine categoryStatus
-    if (hasSurvey) {
-      if (hasDeepPayout && Object.keys(deepPointsByAccount).length > 0) {
-        categoryStatus = 'deep_completed';
-      } else {
-        if (bDate <= todayStr) {
-          categoryStatus = 'deep_pending';
-        } else {
-          categoryStatus = 'upcoming';
-        }
-      }
+    // Determine categoryStatus (Standard Business Priority)
+    if (bDate > todayStr) {
+      categoryStatus = 'upcoming';
+    } else if (hasDeepPayout && Object.keys(deepPointsByAccount).length > 0) {
+      // 1순위: 심화 리워드 입금 완료 -> 심화완료
+      categoryStatus = 'deep_completed';
+    } else if (hasDeepSurvey) {
+      // 2순위: 100자 이상 정식 심화설문 제출 -> 심화대기
+      categoryStatus = 'deep_pending';
+    } else if (isFreeSeminar) {
+      // 3순위: 학술 무료 세미나 -> 무료완료
+      categoryStatus = 'free_completed';
     } else {
-      if (isFreeSeminar) {
-        categoryStatus = bDate <= todayStr ? 'free_completed' : 'upcoming';
-      } else {
-        categoryStatus = bDate <= todayStr ? 'basic_completed' : 'upcoming';
-      }
+      // 4순위: 일반 세미나 (100자 미만 단답형 설문 포함) -> 기본완료
+      categoryStatus = 'basic_completed';
     }
 
     const basicTotal = Object.values(basicPointsByAccount).reduce((a, b) => a + b, 0);
@@ -1385,7 +1386,7 @@ function renderDailyTimeline(targetMonth, dateMap) {
             <div class="pt-1.5">
               <button class="toggle-subjective-btn w-full py-1.5 px-2.5 rounded-lg bg-white border border-slate-200 text-[11px] font-bold text-slate-700 flex items-center justify-between hover:bg-slate-50 transition-all">
                 <span class="flex items-center gap-1.5">
-                  <span>✍️</span> AI 심화설문 주관식 작성 내역
+                  <span>✍️</span> ${sem.categoryStatus.startsWith('deep') ? 'AI 심화설문 주관식 작성 내역' : 'AI 설문 주관식 작성 내역'}
                   <span class="text-[10px] font-bold text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded">전문 수록</span>
                   <span class="text-[10px] font-normal text-slate-400">(${Object.keys(sem.surveyAnswers).map(formatAccountName).join(', ')})</span>
                 </span>
