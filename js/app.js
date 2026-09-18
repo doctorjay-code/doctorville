@@ -860,18 +860,13 @@ function getAggregatedSeminarData(targetMonth) {
     }
   }
 
-  // 1. Process all VOD Master seminars for targetMonth
-  const targetVods = (state.vodMaster || []).filter(v => v.broadcast_date && v.broadcast_date.startsWith(targetMonth));
-
-  for (const v of targetVods) {
-    const sid = v.seminar_id;
-    const bDate = v.broadcast_date;
-    const title = (v.title || '').trim();
-    const timeRange = v.time_range || '13:00 ~ 14:00';
-
+  const addSeminarToMap = (sid, rawTitle, bDate, timeRange = '13:00 ~ 14:00') => {
+    if (!bDate || !bDate.startsWith(targetMonth)) return;
     if (!dateMap.has(bDate)) dateMap.set(bDate, new Map());
     const daySems = dateMap.get(bDate);
+    if (daySems.has(sid)) return;
 
+    const title = (rawTitle || SEMINAR_TITLES[sid] || '라이브 세미나').trim();
     const surveyList = globalSurveyMap.get(sid) || [];
     const hasSurvey = surveyList.length > 0;
     // 100자 이상 주관식 답변이 1개 이상 있어야 정식 심화설문으로 인정
@@ -957,32 +952,31 @@ function getAggregatedSeminarData(targetMonth) {
       totalPoints: basicTotal + deepTotal,
       surveyAnswers
     });
+  };
+
+  // 1. Process all VOD Master seminars for targetMonth
+  for (const v of (state.vodMaster || [])) {
+    addSeminarToMap(v.seminar_id, v.title, v.broadcast_date, v.time_range || '13:00 ~ 14:00');
   }
 
-  // 2. Also attach upcoming seminars from state.seminarsMaster if not in vodMaster
-  for (const sMaster of (state.seminarsMaster || [])) {
-    const mDate = sMaster.seminar_date || '';
-    if (!mDate.startsWith(targetMonth)) continue;
-    const sid = sMaster.seminar_id;
-    if (!sid) continue;
+  // 2. Process all live seminars from state.seminarsMaster for targetMonth
+  for (const s of (state.seminarsMaster || [])) {
+    addSeminarToMap(s.seminar_id, s.title, s.seminar_date, s.time_range || '19:00 ~ 20:00');
+  }
 
-    if (!dateMap.has(mDate)) dateMap.set(mDate, new Map());
-    const daySems = dateMap.get(mDate);
-    if (!daySems.has(sid)) {
-      daySems.set(sid, {
-        sid,
-        title: sMaster.title || '라이브 세미나',
-        eventDate: mDate,
-        timeRange: sMaster.time_range || '19:00 ~ 20:00',
-        payoutDate: null,
-        categoryStatus: 'upcoming',
-        basicPointsByAccount: {},
-        deepPointsByAccount: {},
-        basicPointsTotal: 0,
-        deepPointsTotal: 0,
-        totalPoints: 0,
-        surveyAnswers: {}
-      });
+  // 3. Process any surveys in surveyRecords not yet attached
+  for (const sRec of (state.surveyRecords || [])) {
+    if (sRec.seminar_id && sRec.seminar_date) {
+      addSeminarToMap(sRec.seminar_id, sRec.seminar_title, sRec.seminar_date, '19:00 ~ 20:00');
+    }
+  }
+
+  // 4. Process any deep payouts in deepPayoutMap not yet attached
+  for (const [sid, dp] of deepPayoutMap.entries()) {
+    if (dp.payoutDate) {
+      const foundVod = (state.vodMaster || []).find(v => v.seminar_id === sid);
+      const eDate = foundVod ? foundVod.broadcast_date : dp.payoutDate;
+      addSeminarToMap(sid, SEMINAR_TITLES[sid] || '심화 세미나', eDate, '13:00 ~ 14:00');
     }
   }
 
@@ -2001,4 +1995,22 @@ export function setupEventHandlers() {
       }
     });
   }
+
+  // Reactive Auto-Sync: Silent background refresh on tab focus & 60-second heartbeat
+  let lastAutoSync = Date.now();
+  const triggerSilentSync = () => {
+    const now = Date.now();
+    // Throttle silent refresh to at most once every 15 seconds
+    if (now - lastAutoSync < 15000) return;
+    lastAutoSync = now;
+    loadTransactions(true).then(() => {
+      console.log('🔄 Reactive Auto-Sync complete: points & archive updated');
+    }).catch(err => console.debug('Silent sync skipped:', err));
+  };
+
+  window.addEventListener('focus', triggerSilentSync);
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') triggerSilentSync();
+  });
+  setInterval(triggerSilentSync, 60000);
 }
