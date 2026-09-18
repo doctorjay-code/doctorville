@@ -1009,13 +1009,61 @@ function renderDailyTimeline(targetMonth, dateMap) {
   const datesToShow = filterDate ? [filterDate] : sortedDates;
 
   if (filterDate) {
+    const availableDatesAsc = Array.from(dateMap.keys()).sort();
+    const currentIndex = availableDatesAsc.indexOf(filterDate);
+
+    let prevDate = null;
+    let nextDate = null;
+    if (currentIndex !== -1) {
+      if (currentIndex > 0) prevDate = availableDatesAsc[currentIndex - 1];
+      if (currentIndex < availableDatesAsc.length - 1) nextDate = availableDatesAsc[currentIndex + 1];
+    } else {
+      for (let i = availableDatesAsc.length - 1; i >= 0; i--) {
+        if (availableDatesAsc[i] < filterDate) {
+          prevDate = availableDatesAsc[i];
+          break;
+        }
+      }
+      for (let i = 0; i < availableDatesAsc.length; i++) {
+        if (availableDatesAsc[i] > filterDate) {
+          nextDate = availableDatesAsc[i];
+          break;
+        }
+      }
+    }
+
     const banner = document.createElement('div');
-    banner.className = "flex items-center justify-between bg-blue-50 p-2.5 rounded-xl border border-blue-200 text-xs";
+    banner.className = "flex items-center justify-between bg-blue-50 p-2 rounded-xl border border-blue-200 text-xs";
     banner.innerHTML = `
-      <span class="font-bold text-blue-800">📌 선택된 날짜: ${filterDate}</span>
-      <button id="btnShowAllDates" class="font-bold text-blue-600 hover:underline">전체 날짜 보기</button>
+      <div class="flex items-center gap-1.5">
+        <button id="btnPrevDate" class="w-7 h-7 flex items-center justify-center rounded-lg bg-white border border-blue-200 text-blue-700 hover:bg-blue-100 disabled:opacity-30 disabled:pointer-events-none transition-all shadow-2xs active:scale-90" ${!prevDate ? 'disabled' : ''} title="${prevDate ? `${prevDate}로 이동` : '이전 날짜 없음'}">
+          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M15 19l-7-7 7-7"></path>
+          </svg>
+        </button>
+        <span class="font-bold text-blue-900 px-1">📅 ${filterDate}</span>
+        <button id="btnNextDate" class="w-7 h-7 flex items-center justify-center rounded-lg bg-white border border-blue-200 text-blue-700 hover:bg-blue-100 disabled:opacity-30 disabled:pointer-events-none transition-all shadow-2xs active:scale-90" ${!nextDate ? 'disabled' : ''} title="${nextDate ? `${nextDate}로 이동` : '다음 날짜 없음'}">
+          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M9 5l7 7-7 7"></path>
+          </svg>
+        </button>
+      </div>
+      <button id="btnShowAllDates" class="font-bold text-blue-600 hover:underline px-2 py-1">전체 날짜 보기</button>
     `;
     container.appendChild(banner);
+
+    if (prevDate) {
+      banner.querySelector('#btnPrevDate').addEventListener('click', () => {
+        state.selectedDailyDate = prevDate;
+        renderDailyTimeline(targetMonth, dateMap);
+      });
+    }
+    if (nextDate) {
+      banner.querySelector('#btnNextDate').addEventListener('click', () => {
+        state.selectedDailyDate = nextDate;
+        renderDailyTimeline(targetMonth, dateMap);
+      });
+    }
     banner.querySelector('#btnShowAllDates').addEventListener('click', () => {
       state.selectedDailyDate = null;
       renderDailyTimeline(targetMonth, dateMap);
