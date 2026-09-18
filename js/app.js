@@ -597,7 +597,8 @@ export function loadTransactions(force = false) {
     let hasCache = false;
     if (!force) {
       try {
-        const rawCache = localStorage.getItem('dva_cached_transactions_v4');
+        localStorage.removeItem('dva_cached_transactions_v4');
+        const rawCache = localStorage.getItem('dva_cached_transactions_v5');
         if (rawCache) {
           const cachedRows = JSON.parse(rawCache);
           if (Array.isArray(cachedRows) && cachedRows.length > 0) {
@@ -702,11 +703,11 @@ export function loadTransactions(force = false) {
         }
       }
 
-      // Deduplicate by tx_hash to guarantee 100% integrity
+      // Deduplicate by Natural Key (account, date, description, points, day_seq)
       const seen = new Set();
       const dedupedRows = [];
       for (const row of allRows) {
-        const key = row.tx_hash || `${row.account_name}_${row.trans_date}_${row.service_type || ''}_${row.description}_${row.points}_${row.day_seq || 1}`;
+        const key = `${row.account_name}_${row.trans_date}_${row.description}_${row.points}_${row.day_seq || 1}`;
         if (!seen.has(key)) {
           seen.add(key);
           dedupedRows.push(row);
@@ -721,7 +722,7 @@ export function loadTransactions(force = false) {
       // Update state & Local Storage Cache
       state.transactions = pairedRows;
       try {
-        localStorage.setItem('dva_cached_transactions_v4', JSON.stringify(dedupedRows));
+        localStorage.setItem('dva_cached_transactions_v5', JSON.stringify(dedupedRows));
       } catch (e) {
         // quota safeguard
       }
