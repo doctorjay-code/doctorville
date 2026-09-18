@@ -1102,9 +1102,7 @@ function renderMonthlyCalendar(targetMonth, dateMap) {
         if (sem.isSettled) {
           const kPts = Math.round(sem.totalPoints / 1000);
           ptsText = `${kPts}K`;
-          badgeStyle = sem.isDeepSurvey 
-            ? 'bg-amber-100 text-amber-900 border border-amber-300 shadow-2xs' 
-            : 'bg-emerald-100 text-emerald-900 border border-emerald-300 shadow-2xs';
+          badgeStyle = 'bg-emerald-100 text-emerald-900 border border-emerald-300 shadow-2xs';
         } else if (sem.status === '지급 예정') {
           ptsText = '예정';
           badgeStyle = 'bg-amber-100 text-amber-900 border border-amber-300 shadow-2xs';
