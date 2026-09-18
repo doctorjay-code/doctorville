@@ -2,8 +2,100 @@
 const SUPABASE_URL = "https://jpdospunrcscvfpuqzhf.supabase.co";
 const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImpwZG9zcHVucmNzY3ZmcHVxemhmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODcxNDY3NjcsImV4cCI6MjEwMjcyMjc2N30.UsIKguZm2v5Y_tDilvH7CQuqBt5dG6QSVFMeixX6r5Q";
 
-// 전 기간 188종 세미나 타이틀 사전 (2025.06 ~ 2026.09 전체)
+// 전 기간 250종 세미나 타이틀 사전 (2025.06 ~ 2026.10 전체)
 const SEMINAR_TITLES = {
+  "5755": "단계적으로 치료하는 개원가 천식 관리",
+  "5754": "근골격질환(골다공증)",
+  "5753": "류가형 프로가 선생님의 골프 고민에 직접 답합니다.",
+  "5752": "[재] 류가형 프로의<100타 탈출 클리닉> 골프 고민을 해부하다!",
+  "5751": "[재] 실패 없는 와인 입문: 와인 제대로 알고 마시는 법",
+  "5750": "CNS WEEK",
+  "5749": "CNS WEEK",
+  "5748": "CNS WEEK",
+  "5746": "O.M.T Web Symposium",
+  "5745": "고혈압 WEEK",
+  "5744": "대장암의 조기 진단부터 치료까지",
+  "5743": "고혈압 WEEK",
+  "5742": "ENVLO WEB SYMPOSIUM",
+  "5741": "CNS WEEK",
+  "5740": "[재] 진심(心), Symposium",
+  "5739": "[재] Approaches to Medical Management of Resistant Hypertension",
+  "5738": "Best Combination for Liver Health",
+  "5737": "[고혈압 WEEK] Overcoming Therapeutic Inertia in Elderly Hypertension_What SPOIILER Tells Us",
+  "5736": "시작은 크레스토 웹심포지엄",
+  "5735": "True Atherosclerosis Regression with a 20-year Legacy, CRESTOR",
+  "5734": "CABOMETYX® VALUE UP MEETING",
+  "5733": "CABOMETYX® VALUE UP MEETING",
+  "5732": "심장내과에서 바라보는 펙수클루",
+  "5730": "간질환에 실리마린의 의의",
+  "5729": "스토보클로X엔블로 Web symposium",
+  "5728": "No.1 Collaboration Symposium",
+  "5727": "제미다파정을 활용한 새로운 병용 치료의 제안",
+  "5726": "SWITCHING 임상으로 확인된 제미다파® 치료 전환의 가치",
+  "5724": "아토피피부염 장기 관리를 위한 치료 전략",
+  "5723": "ARB Strategies in Atrial Fibrillation – Clinical value of Olmesartan",
+  "5722": "ARB Strategies in Atrial Fibrillation – Clinical Value of Olmesartan",
+  "5721": "고혈압 WEEK",
+  "5720": "고혈압 WEEK",
+  "5719": "투게더 심포지엄",
+  "5718": "ENVLO WEB SYMPOSIUM",
+  "5717": "ARB Strategies in Atrial Fibrillation – Clinical Value of Olmesartan",
+  "5716": "전공의를 위한 호흡기내과 증례강의",
+  "5715": "DIVE (Digital Innovation, Value & Experience) Web symposium",
+  "5714": "ARB Strategies in Atrial Fibrillation – Clinical Value of Olmesartan",
+  "5713": "Breathe Well Symposium",
+  "5712": "No.1 Gemigliptin Web Zeminar",
+  "5711": "ARB Strategies in Atrial Fibrillation – Clinical Value of Olmesartan",
+  "5710": "Breathe Well Symposium",
+  "5709": "클린콜 케이스리뷰, 대장내시경 정결의 최적 선택",
+  "5708": "위내시경으로 보는 전공의 증례강의",
+  "5707": "Heart Ville Web symposium",
+  "5706": "고혈압 WEEK",
+  "5705": "O.M.T Web Symposium",
+  "5704": "케이스로 보는 류마티스 관절염·척추관절염 – 진단부터 젤토파®정(Tofacitinib) 치료 선택까지",
+  "5703": "DIVE (Digital Innovation, Value & Experience) Web symposium",
+  "5702": "ARB Strategies in Atrial Fibrillation – Clinical Value of Olmesartan",
+  "5701": "From Continuous Monitoring to Sustained Control_CART BP Pro and Olmesartan-Based Therapy",
+  "5700": "No.1 Collaboration 심포지엄",
+  "5699": "Long-term obesity care: clinical evidence of maintaining tirzepatide",
+  "5698": "소화기내과에서 바라보는 펙수클루",
+  "5695": "비뇨기질환에서 프로바이오틱스의 최신지견과 의의",
+  "5693": "O.M.T Web Symposium",
+  "5691": "SWITCHING 임상으로 확인된 제미다파® 치료 전환의 가치",
+  "5690": "[재] 이비인후과에서 바라보는 펙수클루",
+  "5689": "크레스토 웹 심포지엄",
+  "5688": "BEYOND Web Symposium",
+  "5686": "제미다파정을 활용한 새로운 병용치료의 제안",
+  "5685": "Breathe Well Symposium",
+  "5684": "[Libre Week] 혈당 모니터링을 넘어 행동변화로,CGM 기반 새로운 관리 모델",
+  "5683": "펙수클루 Triple Symposium",
+  "5682": "개원가에서의 SGLT-2i 치료 전략",
+  "5681": "[Libre Week] Changing Standards in Inpatient Glycemic Management",
+  "5680": "개원의가 바라보는 펙수클루",
+  "5679": "전문직과 직장인을 위한 거북목·일자목 관리 전략",
+  "5678": "Clinical Efficacy and Safety of Lipothason in Pain Treatment",
+  "5677": "조기 목표혈압 도달 중요성과 약물선택",
+  "5676": "Does Switching Within the DPP-4 Inhibitor Class Make a Real Difference?: Integrating Korean RWE into Diabetes Care",
+  "5673": "이상지질혈증 1차 치료 전략에서 피에젯타의 포지셔닝과 임상적 의의",
+  "5672": "[대한내분비학회] 제4회 ENstagram Webinar",
+  "5671": "New WAVE Webinar",
+  "5670": "[대한심부전학회] 디지털헬스연구회 제 13차 웹심포지엄",
+  "5669": "개원의를 위한 고혈압 처방 팁: 인다파미드 기반 3제 복합제로 강압효과 극대화하기",
+  "5668": "일반 개원의가 바라보는 펙수클루",
+  "5665": "소화기내과에서 바라보는 펙수클루",
+  "5664": "심혈관질환자에서 대상포진 예방의 중요성",
+  "5660": "DEEP INSIGHT WEDNESDAY WEBINAR_Dual Regeneration Strategy: ECM Restoration & Collagen Biostimulation",
+  "5651": "For Strong Bone, STOBOCLO",
+  "5646": "[ENDO WEEK] Real-Time Glucose Readings,Every Single Minute:FreeStyle Libre 2",
+  "5644": "No.1 Collaboration WEB Symposium",
+  "5643": "Gastro-protection Strategies in NSAIDs Therapy",
+  "5639": "일반 개원의가 바라보는 펙수클루",
+  "5638": "[EZcare WEEK] 개원가의 눈으로 바라보는 이상지질혈증의 모든 것",
+  "5635": "[EZcare WEEK] 이상지질혈증 치료의 최신 근거와 바로에젯의 임상적 역할",
+  "5634": "척수성 근위축증(SMA) 조기 진단과 전원",
+  "5633": "소화기 내시경의 새로운 패러다임: WAYMED ENDO AI를 활용한 병변 검출 실전",
+  "5631": "True Cardiovascular Event Prevention from the HEART, CRESTOR",
+  "5629": "True Cardiovascular Event Prevention from the HEART, CRESTOR",
   "5667": "ALL 4 ONE WEB Symposium",
   "5663": "Exploring the therapeutic potential of SGLT-2 Inhibitors",
   "5662": "크레스토 웹심포지엄",
@@ -209,6 +301,34 @@ const ACCOUNT_DISPLAY = {
 };
 function formatAccountName(name) {
   return ACCOUNT_DISPLAY[name] || name;
+}
+
+// Clean and normalize seminar titles across history
+function cleanSeminarTitle(title) {
+  if (!title) return '라이브 세미나';
+  let t = String(title).trim();
+  t = t.replace(/[\r\n\t]+/g, ' ');
+  t = t.replace(/\s+/g, ' ');
+  t = t.replace(/^비공개\s*/, '');
+  t = t.replace(/\s*\(세미나\s*\[.*?\]\s*설문.*?\)/g, '');
+  t = t.replace(/&amp;/g, '&');
+  t = t.replace(/\)+$/, '');
+  t = t.trim();
+  return t || '라이브 세미나';
+}
+
+// Reverse SID lookup by seminar title
+function findSeminarIdByTitle(title) {
+  if (!title) return null;
+  const clean = cleanSeminarTitle(title);
+  if (!clean || clean === '라이브 세미나') return null;
+
+  for (const [sid, fullTitle] of Object.entries(SEMINAR_TITLES)) {
+    if (fullTitle === clean || fullTitle.includes(clean) || clean.includes(fullTitle)) {
+      return sid;
+    }
+  }
+  return null;
 }
 
 // Global State
@@ -977,23 +1097,32 @@ function renderMonthlyCalendar(targetMonth, dateMap) {
     let badgesHtml = '<div class="space-y-1 w-full">';
     if (hasSems) {
       for (const sem of daySems.values()) {
-        let ptsBadge = '';
+        let ptsText = '';
+        let badgeStyle = '';
         if (sem.isSettled) {
-          const formattedPts = `+${sem.totalPoints.toLocaleString()}P`;
-          const badgeClass = sem.isDeepSurvey 
-            ? 'bg-amber-100 text-amber-900 border border-amber-300' 
-            : 'bg-emerald-100 text-emerald-900 border border-emerald-300';
-          ptsBadge = `<span class="px-1 py-0.2 rounded font-bold text-[8.5px] leading-tight shrink-0 shadow-2xs ${badgeClass}">${formattedPts}</span>`;
+          const kPts = Math.round(sem.totalPoints / 1000);
+          ptsText = `${kPts}K`;
+          badgeStyle = sem.isDeepSurvey 
+            ? 'bg-amber-100 text-amber-900 border border-amber-300 shadow-2xs' 
+            : 'bg-emerald-100 text-emerald-900 border border-emerald-300 shadow-2xs';
         } else if (sem.status === '지급 예정') {
-          ptsBadge = `<span class="px-1 py-0.2 rounded font-bold text-[8.5px] leading-tight shrink-0 shadow-2xs bg-amber-100 text-amber-900 border border-amber-300">⏳지급예정</span>`;
+          ptsText = '예정';
+          badgeStyle = 'bg-amber-100 text-amber-900 border border-amber-300 shadow-2xs';
         } else {
-          ptsBadge = `<span class="px-1 py-0.2 rounded font-bold text-[8.5px] leading-tight shrink-0 bg-blue-100 text-blue-800 border border-blue-200">🔵${sem.status || '예정'}</span>`;
+          ptsText = '예정';
+          badgeStyle = 'bg-blue-100 text-blue-800 border border-blue-200';
         }
 
+        const sidText = sem.sid || findSeminarIdByTitle(sem.title) || '세미나';
+
         badgesHtml += `
-          <div class="flex items-center gap-1 w-full" title="${sem.title}">
-            <span class="px-1 py-0.2 rounded bg-slate-200 text-slate-800 font-mono font-bold text-[8.5px] leading-tight shrink-0">${sem.sid || '세미나'}</span>
-            ${ptsBadge}
+          <div class="flex items-center gap-0.5 w-full text-[8.5px] font-bold leading-none" title="${sem.title}">
+            <span class="flex-1 py-0.5 rounded bg-slate-200 text-slate-800 font-mono text-center truncate">
+              ${sidText}
+            </span>
+            <span class="flex-1 py-0.5 rounded text-center truncate ${badgeStyle}">
+              ${ptsText}
+            </span>
           </div>
         `;
       }
@@ -1180,10 +1309,10 @@ function renderDailyTimeline(targetMonth, dateMap) {
           <div class="flex items-start justify-between gap-2">
             <div class="min-w-0 flex-1">
               <div class="flex flex-wrap items-center gap-1.5 mb-1.5">
-                ${sem.sid ? `<span class="text-[10px] font-bold font-mono px-1.5 py-0.5 rounded bg-slate-200 text-slate-700">ID: ${sem.sid}</span>` : ''}
+                ${(sem.sid || findSeminarIdByTitle(sem.title)) ? `<span class="text-[10px] font-bold font-mono px-1.5 py-0.5 rounded bg-slate-200 text-slate-700">ID: ${sem.sid || findSeminarIdByTitle(sem.title)}</span>` : ''}
                 ${badgesMarkup}
               </div>
-              <h5 class="text-xs font-bold text-slate-800 leading-snug break-keep">${sem.title}</h5>
+              <h5 class="text-xs font-bold text-slate-800 leading-snug break-keep">${cleanSeminarTitle(sem.title)}</h5>
             </div>
           </div>
 
