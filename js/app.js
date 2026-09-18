@@ -915,21 +915,32 @@ function renderMonthlyCalendar(targetMonth, dateMap) {
   const [yearStr, monthStr] = targetMonth.split('-');
   const year = parseInt(yearStr, 10);
   const month = parseInt(monthStr, 10);
-  if (titleEl) titleEl.innerHTML = `<span>📅</span> ${year}년 ${month}월 세미나 달력`;
+  if (titleEl) titleEl.innerHTML = `<span>📅</span> ${year}년 ${month}월 세미나 달력 (평일)`;
 
   grid.innerHTML = '';
 
-  const firstDay = new Date(year, month - 1, 1).getDay();
+  const firstDayRaw = new Date(year, month - 1, 1).getDay();
   const totalDays = new Date(year, month, 0).getDate();
   const todayStr = new Date().toISOString().slice(0, 10);
 
-  for (let i = 0; i < firstDay; i++) {
+  // 평일(월~금) 5열 그리드: 월(1)->0, 화(2)->1, 수(3)->2, 목(4)->3, 금(5)->4, 토/일->0
+  let leadEmptyDays = 0;
+  if (firstDayRaw >= 1 && firstDayRaw <= 5) {
+    leadEmptyDays = firstDayRaw - 1;
+  }
+
+  for (let i = 0; i < leadEmptyDays; i++) {
     const emptyCell = document.createElement('div');
-    emptyCell.className = "h-20 bg-slate-50/50 rounded-lg border border-slate-100/50";
+    emptyCell.className = "min-h-[85px] bg-slate-50/40 rounded-xl border border-slate-100/60";
     grid.appendChild(emptyCell);
   }
 
   for (let day = 1; day <= totalDays; day++) {
+    const dayDate = new Date(year, month - 1, day);
+    const dayOfWeek = dayDate.getDay();
+    // 주말(토=6, 일=0)은 달력에서 제외
+    if (dayOfWeek === 0 || dayOfWeek === 6) continue;
+
     const dayStr = String(day).padStart(2, '0');
     const fullDate = `${targetMonth}-${dayStr}`;
     const daySems = dateMap.get(fullDate);
@@ -937,15 +948,15 @@ function renderMonthlyCalendar(targetMonth, dateMap) {
     const isToday = fullDate === todayStr;
 
     const cell = document.createElement('div');
-    cell.className = `h-20 p-1 rounded-lg border flex flex-col justify-between transition-all cursor-pointer ${
+    cell.className = `min-h-[85px] p-1.5 rounded-xl border flex flex-col justify-start gap-1 transition-all cursor-pointer ${
       hasSems 
-        ? 'bg-blue-50/70 border-blue-200 hover:border-blue-400 hover:shadow-xs' 
+        ? 'bg-blue-50/60 border-blue-200 hover:border-blue-400 hover:shadow-xs' 
         : isToday 
           ? 'bg-emerald-50/40 border-emerald-300' 
           : 'bg-white border-slate-100 hover:bg-slate-50'
     }`;
 
-    let topHtml = `<div class="flex items-center justify-between"><span class="text-[10px] font-bold ${
+    let topHtml = `<div class="flex items-center justify-between pb-0.5 border-b border-slate-100/80"><span class="text-[10px] font-bold ${
       isToday ? 'text-emerald-700 bg-emerald-100 px-1 rounded' : 'text-slate-600'
     }">${day}</span>`;
     if (hasSems) {
@@ -953,34 +964,28 @@ function renderMonthlyCalendar(targetMonth, dateMap) {
     }
     topHtml += `</div>`;
 
-    let badgesHtml = '<div class="space-y-0.5 overflow-hidden">';
+    let badgesHtml = '<div class="space-y-1 w-full">';
     if (hasSems) {
-      let count = 0;
       for (const sem of daySems.values()) {
-        if (count >= 2) {
-          badgesHtml += `<div class="text-[8px] font-bold text-slate-400 text-center leading-none">+${daySems.size - 2}건 더보기</div>`;
-          break;
-        }
-        let ptsText = '';
-        let badgeColor = '';
+        let ptsBadge = '';
         if (sem.isSettled) {
-          ptsText = `+${(sem.totalPoints / 1000).toFixed(0)}k`;
-          badgeColor = sem.isDeepSurvey ? 'bg-amber-500 text-white' : 'bg-emerald-600 text-white';
+          const formattedPts = `+${sem.totalPoints.toLocaleString()}P`;
+          const badgeClass = sem.isDeepSurvey 
+            ? 'bg-amber-100 text-amber-900 border border-amber-300' 
+            : 'bg-emerald-100 text-emerald-900 border border-emerald-300';
+          ptsBadge = `<span class="px-1 py-0.2 rounded font-bold text-[8.5px] leading-tight shrink-0 shadow-2xs ${badgeClass}">${formattedPts}</span>`;
         } else if (sem.status === '지급 예정') {
-          const accs = Object.keys(sem.pendingAccounts || {}).map(formatAccountName).join('/');
-          ptsText = accs ? `⏳[${accs}]예정` : '⏳예정';
-          badgeColor = 'bg-amber-600 text-white border border-amber-400';
+          ptsBadge = `<span class="px-1 py-0.2 rounded font-bold text-[8.5px] leading-tight shrink-0 shadow-2xs bg-amber-100 text-amber-900 border border-amber-300">⏳지급예정</span>`;
         } else {
-          ptsText = '예정';
-          badgeColor = 'bg-blue-500 text-white';
+          ptsBadge = `<span class="px-1 py-0.2 rounded font-bold text-[8.5px] leading-tight shrink-0 bg-blue-100 text-blue-800 border border-blue-200">🔵예정</span>`;
         }
 
         badgesHtml += `
-          <div class="text-[8px] font-semibold truncate rounded px-1 py-0.2 ${badgeColor} leading-tight" title="${sem.title}">
-            ${sem.sid ? `${sem.sid} ` : ''}${ptsText}
+          <div class="flex items-center gap-1 w-full" title="${sem.title}">
+            <span class="px-1 py-0.2 rounded bg-slate-200 text-slate-800 font-mono font-bold text-[8.5px] leading-tight shrink-0">${sem.sid || '세미나'}</span>
+            ${ptsBadge}
           </div>
         `;
-        count++;
       }
     }
     badgesHtml += '</div>';
@@ -1172,23 +1177,14 @@ function renderDailyTimeline(targetMonth, dateMap) {
             </div>
           </div>
 
-          <!-- 일정 및 정산 상세 정보 (진행일 vs 입금일 명확 표기) -->
-          <div class="flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-slate-500 pt-1 border-t border-slate-200/50">
+          <!-- 일정 및 정산 상세 정보 (진행일 및 입금일만 깔끔하게 유지) -->
+          <div class="flex items-center gap-x-3 text-[10px] text-slate-500 pt-1 border-t border-slate-200/50">
             <span>📅 <strong>진행일</strong>: ${sem.eventDate}</span>
             ${sem.isSettled ? `
               <span class="text-emerald-700 font-semibold">💰 <strong>입금일</strong>: ${sem.payoutDate}</span>
-            ` : sem.status === '지급 예정' ? `
-              <span class="text-amber-700 font-bold">⏳ <strong>정산 상태</strong>: 닥터빌 검수 및 지급 대기 중</span>
             ` : `
-              <span class="text-blue-600 font-medium">⏱️ <strong>시간</strong>: ${sem.timeRange || '19:00 ~ 20:00'}</span>
+              <span class="text-amber-700 font-semibold">💰 <strong>입금일</strong>: 지급예정</span>
             `}
-            ${Object.keys(sem.pointsByAccount).length > 0 ? `
-              <span class="text-slate-300">|</span>
-              <span>계정별 확정 입금:</span>
-              ${Object.entries(sem.pointsByAccount).map(([acc, pts]) => `
-                <span class="font-medium text-slate-700"><strong>${formatAccountName(acc)}</strong>: +${pts.toLocaleString()}P</span>
-              `).join(' · ')}
-            ` : ''}
           </div>
 
           ${hasSurveyAnswers ? `
