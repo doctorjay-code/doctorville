@@ -262,33 +262,47 @@
           </div>
         </div>
 
-        <!-- 1,000P Regular Survey Filter Toggle -->
-        <div class="flex items-center justify-between pt-2 border-t border-slate-100 text-xs">
-          <span class="text-[11px] font-semibold text-slate-400">1,000P 수강 설문:</span>
-          <div class="flex bg-slate-100 p-0.5 rounded-lg gap-1">
-            <button id="filterDeepOnlyBtn" class="px-2.5 py-1 text-[11px] font-bold rounded-md bg-white text-blue-600 shadow-xs transition-all flex items-center gap-1">
-              <span>🎯</span> 숨김 (심화만)
+        <!-- Multi-select Category Filter Buttons -->
+        <div class="flex items-center justify-between pt-2 border-t border-slate-100 text-xs gap-1.5 flex-wrap">
+          <span class="text-[11px] font-semibold text-slate-400">필터:</span>
+          <div class="flex flex-wrap gap-1 flex-1 justify-end" id="seminarFilterGroup">
+            <button data-filter="deep_completed" class="filter-toggle-btn active px-2.5 py-1 text-[11px] font-bold rounded-lg border border-emerald-400 bg-emerald-500 text-white transition-all cursor-pointer shadow-2xs">
+              심화완료
             </button>
-            <button id="filterAllSurveysBtn" class="px-2.5 py-1 text-[11px] font-medium rounded-md text-slate-500 hover:text-slate-800 transition-all flex items-center gap-1">
-              <span>📝</span> 모두 표시
+            <button data-filter="deep_pending" class="filter-toggle-btn active px-2.5 py-1 text-[11px] font-bold rounded-lg border border-amber-400 bg-amber-500 text-white transition-all cursor-pointer shadow-2xs">
+              심화대기
+            </button>
+            <button data-filter="basic_completed" class="filter-toggle-btn active px-2.5 py-1 text-[11px] font-bold rounded-lg border border-blue-400 bg-blue-500 text-white transition-all cursor-pointer shadow-2xs">
+              기본완료
+            </button>
+            <button data-filter="free_completed" class="filter-toggle-btn active px-2.5 py-1 text-[11px] font-bold rounded-lg border border-slate-300 bg-slate-200 text-slate-800 transition-all cursor-pointer shadow-2xs">
+              무료완료
             </button>
           </div>
         </div>
       </div>
 
-      <!-- B. Monthly Seminar KPI Summary -->
-      <div class="grid grid-cols-3 gap-2">
-        <div class="bg-white p-3 rounded-xl card-shadow border border-slate-100 text-center">
-          <span class="text-[10px] text-slate-400 block font-semibold">진행/예정 세미나</span>
-          <strong class="text-sm font-black text-slate-800 mt-0.5 block" id="seminarKpiCount">0건</strong>
+      <!-- B. Monthly Seminar KPI Summary (4 Categories) -->
+      <div class="grid grid-cols-2 sm:grid-cols-4 gap-2">
+        <div class="bg-white p-2.5 rounded-xl card-shadow border border-emerald-100 text-center">
+          <span class="text-[10px] text-emerald-700 block font-bold">🟢 심화완료</span>
+          <strong class="text-xs font-black text-slate-800 mt-0.5 block" id="kpiDeepCompletedCount">0건</strong>
+          <span class="text-[10px] font-extrabold text-emerald-600 block mt-0.5" id="kpiDeepCompletedPoints">+0 P</span>
         </div>
-        <div class="bg-white p-3 rounded-xl card-shadow border border-slate-100 text-center">
-          <span class="text-[10px] text-slate-400 block font-semibold">세미나 획득 포인트</span>
-          <strong class="text-sm font-black text-emerald-600 mt-0.5 block" id="seminarKpiPoints">+0 P</strong>
+        <div class="bg-white p-2.5 rounded-xl card-shadow border border-amber-100 text-center">
+          <span class="text-[10px] text-amber-700 block font-bold">🟡 심화대기</span>
+          <strong class="text-xs font-black text-slate-800 mt-0.5 block" id="kpiDeepPendingCount">0건</strong>
+          <span class="text-[10px] font-extrabold text-amber-600 block mt-0.5" id="kpiDeepPendingPoints">+0 P</span>
         </div>
-        <div class="bg-white p-3 rounded-xl card-shadow border border-slate-100 text-center">
-          <span class="text-[10px] text-slate-400 block font-semibold">심화설문 작성</span>
-          <strong class="text-sm font-black text-blue-600 mt-0.5 block" id="seminarKpiSurveys">0건</strong>
+        <div class="bg-white p-2.5 rounded-xl card-shadow border border-blue-100 text-center">
+          <span class="text-[10px] text-blue-700 block font-bold">🔵 기본완료</span>
+          <strong class="text-xs font-black text-slate-800 mt-0.5 block" id="kpiBasicCompletedCount">0건</strong>
+          <span class="text-[10px] font-extrabold text-blue-600 block mt-0.5" id="kpiBasicCompletedPoints">+0 P</span>
+        </div>
+        <div class="bg-white p-2.5 rounded-xl card-shadow border border-slate-100 text-center">
+          <span class="text-[10px] text-slate-500 block font-bold">⚪ 무료완료</span>
+          <strong class="text-xs font-black text-slate-800 mt-0.5 block" id="kpiFreeCompletedCount">0건</strong>
+          <span class="text-[10px] font-extrabold text-slate-400 block mt-0.5" id="kpiFreeCompletedPoints">0 P</span>
         </div>
       </div>
 
@@ -324,7 +338,7 @@
   <!-- App Bootstrap -->
   <script type="module">
     import { initSecurityAuth, setAuthSuccessCallback } from './js/auth.js';
-    import { loadTransactions, setupEventHandlers, renderApp } from './js/app.js?v=16';
+    import { loadTransactions, setupEventHandlers, renderApp } from './js/app.js?v=18';
 
     document.addEventListener('DOMContentLoaded', () => {
       setupEventHandlers();

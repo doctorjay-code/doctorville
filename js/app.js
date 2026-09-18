@@ -364,10 +364,17 @@ const state = {
   seminarViewMode: 'monthly', // 'monthly' | 'daily'
   selectedSeminarMonth: '2026-09',
   selectedDailyDate: null,
-  hideRegularSurveys: true, // true: 1,000P 기본설문 숨김 (심화설문 집중 모드), false: 1,000P 포함
+  hideRegularSurveys: false,
+  seminarFilters: {
+    deep_completed: true,
+    deep_pending: true,
+    basic_completed: true,
+    free_completed: true
+  },
   allAnswersExpanded: false, // false: 주관식 답변 기본 접힘(Closed)
   surveyRecords: [],
-  seminarsMaster: []
+  seminarsMaster: [],
+  vodMaster: []
 };
 
 // Sub-category mapping definitions
@@ -612,9 +619,10 @@ export function loadTransactions(force = false) {
       const url = `${SUPABASE_URL}/rest/v1/dva_point_transactions?select=id,trans_date,account_name,category,service_type,description,points,expire_date,day_seq,tx_hash&order=trans_date.desc,id.desc`;
       const semUrl = `${SUPABASE_URL}/rest/v1/dva_seminars?select=*`;
       const surveyUrl = `${SUPABASE_URL}/rest/v1/dva_survey_records?select=*&order=id.desc`;
+      const vodUrl = `${SUPABASE_URL}/rest/v1/dva_vod_master?select=seminar_id,title,broadcast_date,time_range,category,lecturer&order=broadcast_date.desc`;
       const batchRanges = ['0-999', '1000-1999', '2000-2999', '3000-3999'];
 
-      const [responses, semRows, surveyRows] = await Promise.all([
+      const [responses, semRows, surveyRows, vodRows] = await Promise.all([
         Promise.all(batchRanges.map(range => 
           fetch(url, {
             headers: {
@@ -635,8 +643,23 @@ export function loadTransactions(force = false) {
             'apikey': SUPABASE_KEY,
             'Authorization': `Bearer ${SUPABASE_KEY}`
           }
+        }).then(r => r.ok ? r.json() : []).catch(() => []),
+        fetch(vodUrl, {
+          headers: {
+            'apikey': SUPABASE_KEY,
+            'Authorization': `Bearer ${SUPABASE_KEY}`
+          }
         }).then(r => r.ok ? r.json() : []).catch(() => [])
       ]);
+
+      if (Array.isArray(vodRows)) {
+        state.vodMaster = vodRows;
+        for (const v of vodRows) {
+          if (v.seminar_id && v.title) {
+            SEMINAR_TITLES[v.seminar_id] = v.title.trim();
+          }
+        }
+      }
 
       if (Array.isArray(semRows)) {
         state.seminarsMaster = semRows;
@@ -646,7 +669,9 @@ export function loadTransactions(force = false) {
             if (cleanTitle.includes('만족도') || cleanTitle.includes('설문조사 양식') || cleanTitle.includes('양식 폼')) {
               continue;
             }
-            SEMINAR_TITLES[s.seminar_id] = cleanTitle;
+            if (!SEMINAR_TITLES[s.seminar_id]) {
+              SEMINAR_TITLES[s.seminar_id] = cleanTitle;
+            }
           }
         }
       }
@@ -801,6 +826,7 @@ function populateSeminarMonthDropdown() {
 
 function getAggregatedSeminarData(targetMonth) {
   const dateMap = new Map();
+  const todayStr = new Date().toISOString().slice(0, 10);
 
   // 0. Build global lookup maps
   const globalSurveyMap = new Map();
@@ -812,155 +838,56 @@ function getAggregatedSeminarData(targetMonth) {
     }
   }
 
-  const globalMasterMap = new Map();
-  for (const sMaster of (state.seminarsMaster || [])) {
-    if (sMaster.seminar_id) {
-      globalMasterMap.set(sMaster.seminar_id, sMaster);
-    }
-  }
+  // Map of transactions: deepPayouts & basic attendance
+  const deepPayoutMap = new Map();
+  const basicAttendanceMap = new Map();
 
-  // 헬퍼: 거래 내역에서 실제 세미나/설문 진행 날짜(Event Date) 도출
-  function extractEventDateFromTx(tx, sid) {
-    const desc = tx.description || '';
-    const mDate = desc.match(/([0-9]{1,2})\/([0-9]{1,2})\s*설문/);
-    if (mDate) {
-      const year = tx.trans_date ? tx.trans_date.slice(0, 4) : '2026';
-      const mm = String(mDate[1]).padStart(2, '0');
-      const dd = String(mDate[2]).padStart(2, '0');
-      return `${year}-${mm}-${dd}`;
-    }
-    if (sid && globalSurveyMap.has(sid)) {
-      const first = globalSurveyMap.get(sid)[0];
-      const sDate = first.seminar_date || (first.submitted_at ? first.submitted_at.slice(0, 10) : '');
-      if (sDate) return sDate;
-    }
-    if (sid && globalMasterMap.has(sid)) {
-      const sMaster = globalMasterMap.get(sid);
-      if (sMaster.seminar_date) return sMaster.seminar_date;
-    }
-    return tx.trans_date;
-  }
-
-  // 1. 거래 내역 기반 집계 (실제 입금 완료된 세미나)
   for (const tx of state.transactions) {
-    if (state.account !== 'all' && tx.account_name !== state.account) continue;
-
     const desc = tx.description || '';
     const m = desc.match(/(?:설문|세미나).*?([0-9]{4})/) || desc.match(/([0-9]{4}).*?(?:세미나|설문)/);
     const sid = m ? (m[1] || m[2]) : null;
-    const isSurvey = desc.includes('설문') || desc.includes('세미나');
 
-    if (!isSurvey && !sid) continue;
-
-    // 1,000P 단순 출석 기본 설문 필터링 (심화설문만 보기 모드일 때 제외)
-    const isRegular1000 = tx.points <= 1000 && !desc.includes('심화') && !(sid && globalSurveyMap.has(sid));
-    if (state.hideRegularSurveys && isRegular1000) {
-      continue;
-    }
-
-    // 실제 세미나 진행일 산출 및 타겟 월 필터링
-    const eventDate = extractEventDateFromTx(tx, sid);
-    if (!eventDate.startsWith(targetMonth)) continue;
-
-    const sKey = sid || `survey_${tx.points}_${tx.day_seq || 1}`;
-
-    if (!dateMap.has(eventDate)) dateMap.set(eventDate, new Map());
-    const daySems = dateMap.get(eventDate);
-
-    if (!daySems.has(sKey)) {
-      let tTitle = sid && SEMINAR_TITLES[sid] ? SEMINAR_TITLES[sid] : (tx.displayTitle || '').replace(/^[📘🎯📝]\s*/, '');
-      if ((tTitle.includes('만족도') || tTitle.includes('양식 폼')) && sid && SEMINAR_TITLES[sid]) {
-        tTitle = SEMINAR_TITLES[sid];
-      }
-      daySems.set(sKey, {
-        sid: sid || '',
-        title: tTitle,
-        eventDate: eventDate,
-        payoutDate: tx.trans_date, // 실제 포인트 입금일
-        pointsByAccount: {},
-        pendingAccounts: {},
-        totalPoints: 0,
-        surveyAnswers: {},
-        isDeepSurvey: tx.points >= 2000 || (sid && globalSurveyMap.has(sid)),
-        isSettled: true, // 정산 완료 플래그
-        status: '정산 완료'
-      });
-    }
-
-    const item = daySems.get(sKey);
-    item.pointsByAccount[tx.account_name] = (item.pointsByAccount[tx.account_name] || 0) + tx.points;
-    item.totalPoints += tx.points;
-    if (tx.points >= 2000 || (sid && globalSurveyMap.has(sid))) item.isDeepSurvey = true;
-    item.isSettled = true;
-    item.payoutDate = tx.trans_date;
-
-    // 주관식 설문 내역 자동 결합 (복수 문항 완전 지원)
-    if (sid && globalSurveyMap.has(sid)) {
-      for (const sRec of globalSurveyMap.get(sid)) {
-        if (state.account === 'all' || sRec.account_name === state.account) {
-          const acc = sRec.account_name;
-          if (acc) {
-            if (!item.surveyAnswers[acc]) item.surveyAnswers[acc] = [];
-            const isDupe = item.surveyAnswers[acc].some(
-              q => q.question === sRec.question && q.answer === sRec.subjective_answer
-            );
-            if (!isDupe) {
-              item.surveyAnswers[acc].push({
-                question: sRec.question,
-                answer: sRec.subjective_answer,
-                charCount: sRec.char_count || (sRec.subjective_answer ? sRec.subjective_answer.length : 0),
-                submittedAt: sRec.submitted_at
-              });
-            }
-          }
-        }
-      }
+    if (sid && tx.points >= 2000) {
+      if (!deepPayoutMap.has(sid)) deepPayoutMap.set(sid, { pointsByAcc: {}, payoutDate: tx.trans_date });
+      const dp = deepPayoutMap.get(sid);
+      dp.pointsByAcc[tx.account_name] = (dp.pointsByAcc[tx.account_name] || 0) + tx.points;
+      dp.payoutDate = tx.trans_date;
+    } else if (tx.points === 1000 && (desc.includes('세미나') || desc.includes('설문'))) {
+      const d = tx.trans_date;
+      if (!basicAttendanceMap.has(d)) basicAttendanceMap.set(d, {});
+      const ba = basicAttendanceMap.get(d);
+      ba[tx.account_name] = (ba[tx.account_name] || 0) + 1;
     }
   }
 
-  // 2. 설문 제출 기록 중 아직 포인트 미입금 건 (정산/지급 대기 중인 세미나)
-  for (const sRec of (state.surveyRecords || [])) {
-    const sDate = sRec.seminar_date || (sRec.submitted_at ? sRec.submitted_at.slice(0, 10) : '');
-    if (!sDate.startsWith(targetMonth)) continue;
-    if (state.account !== 'all' && sRec.account_name !== state.account) continue;
+  // 1. Process all VOD Master seminars for targetMonth
+  const targetVods = (state.vodMaster || []).filter(v => v.broadcast_date && v.broadcast_date.startsWith(targetMonth));
 
-    let sid = sRec.seminar_id || '';
-    const rawTitle = sRec.seminar_title || '';
-    const cleanRecTitle = (rawTitle && !rawTitle.includes('만족도') && !rawTitle.includes('양식 폼')) ? cleanSeminarTitle(rawTitle) : '';
+  for (const v of targetVods) {
+    const sid = v.seminar_id;
+    const bDate = v.broadcast_date;
+    const title = (v.title || '').trim();
+    const timeRange = v.time_range || '13:00 ~ 14:00';
 
-    // SID가 누락된 경우 제목으로 역추적
-    if (!sid && cleanRecTitle) {
-      sid = findSeminarIdByTitle(cleanRecTitle) || '';
-    }
+    if (!dateMap.has(bDate)) dateMap.set(bDate, new Map());
+    const daySems = dateMap.get(bDate);
 
-    // 2-1. 이미 transactions(1단계)에서 해당 세미나가 입금 완료로 등록되었는지 전체 날짜 검사
-    let settledItem = null;
-    for (const dSems of dateMap.values()) {
-      if (sid && dSems.has(sid) && dSems.get(sid).isSettled) {
-        settledItem = dSems.get(sid);
-        break;
-      }
-      if (cleanRecTitle && cleanRecTitle !== '라이브 세미나' && cleanRecTitle !== '라이브 세미나 심화설문') {
-        for (const existing of dSems.values()) {
-          if (existing.isSettled && existing.title && existing.title.trim() === cleanRecTitle) {
-            settledItem = existing;
-            break;
-          }
-        }
-      }
-      if (settledItem) break;
-    }
+    const hasSurvey = globalSurveyMap.has(sid);
+    const hasDeepPayout = deepPayoutMap.has(sid);
 
-    // 이미 입금 완료된 카드가 존재하면, 주관식 답변만 결합하고 유령 카드 생성 방지!
-    if (settledItem) {
-      const acc = sRec.account_name;
-      if (acc) {
-        if (!settledItem.surveyAnswers[acc]) settledItem.surveyAnswers[acc] = [];
-        const isDupe = settledItem.surveyAnswers[acc].some(
-          q => q.question === sRec.question && q.answer === sRec.subjective_answer
-        );
-        if (!isDupe) {
-          settledItem.surveyAnswers[acc].push({
+    let categoryStatus = 'upcoming';
+    let payoutDate = null;
+    const basicPointsByAccount = {};
+    const deepPointsByAccount = {};
+    const surveyAnswers = {};
+
+    // Collect survey answers
+    if (hasSurvey) {
+      for (const sRec of globalSurveyMap.get(sid)) {
+        if (state.account === 'all' || sRec.account_name === state.account) {
+          const acc = sRec.account_name;
+          if (!surveyAnswers[acc]) surveyAnswers[acc] = [];
+          surveyAnswers[acc].push({
             question: sRec.question,
             answer: sRec.subjective_answer,
             charCount: sRec.char_count || (sRec.subjective_answer ? sRec.subjective_answer.length : 0),
@@ -968,99 +895,94 @@ function getAggregatedSeminarData(targetMonth) {
           });
         }
       }
-      continue;
     }
 
-    // 2-2. 아직 미입금(지급 예정) 건: 해당 날짜 맵에 그룹핑
-    if (!dateMap.has(sDate)) dateMap.set(sDate, new Map());
-    const daySems = dateMap.get(sDate);
+    // Determine basic points (1000P on eventDate)
+    const isFreeSeminar = title.includes('Global Journal') || title.includes('무료') || (bDate <= todayStr && !hasSurvey && !hasDeepPayout && (!basicAttendanceMap.has(bDate) || Object.keys(basicAttendanceMap.get(bDate)).length === 0));
 
-    // ★ 동일 세미나는 무조건 단 1개 카드로만 그룹핑 (sid 우선, 없으면 cleanRecTitle, 그래도 없으면 날짜별 단일 fallback)
-    let sKey = sid;
-    if (!sKey) {
-      if (cleanRecTitle && cleanRecTitle !== '라이브 세미나' && cleanRecTitle !== '라이브 세미나 심화설문') {
-        sKey = `title_${cleanRecTitle}`;
+    if (bDate <= todayStr && !isFreeSeminar) {
+      if (state.account === 'all') {
+        basicPointsByAccount['박범준'] = 1000;
+        basicPointsByAccount['박주하'] = 1000;
       } else {
-        sKey = `unassigned_${sDate}`;
+        basicPointsByAccount[state.account] = 1000;
       }
     }
 
-    let matchedItem = daySems.get(sKey);
-    if (!matchedItem) {
-      let displayTitle = cleanRecTitle;
-      if (!displayTitle || displayTitle === '라이브 세미나' || displayTitle === '라이브 세미나 심화설문') {
-        displayTitle = (sid && SEMINAR_TITLES[sid]) ? SEMINAR_TITLES[sid] : '라이브 세미나 심화설문';
-      }
-      matchedItem = {
-        sid: sid,
-        title: displayTitle,
-        eventDate: sDate,
-        payoutDate: null,
-        pointsByAccount: {},
-        pendingAccounts: {}, // 계정별 참여 기록 (금액 없음)
-        totalPoints: 0, // 포인트 금액 일체 표기 안 함
-        surveyAnswers: {},
-        isDeepSurvey: true,
-        isSettled: false, // 지급 대기 플래그
-        status: '지급 예정'
-      };
-      daySems.set(sKey, matchedItem);
-    }
-
-    if (sRec.account_name) {
-      matchedItem.pendingAccounts[sRec.account_name] = true;
-    }
-
-    const acc = sRec.account_name;
-    if (acc) {
-      if (!matchedItem.surveyAnswers[acc]) matchedItem.surveyAnswers[acc] = [];
-      const isDupe = matchedItem.surveyAnswers[acc].some(
-        q => q.question === sRec.question && q.answer === sRec.subjective_answer
-      );
-      if (!isDupe) {
-        matchedItem.surveyAnswers[acc].push({
-          question: sRec.question,
-          answer: sRec.subjective_answer,
-          charCount: sRec.char_count || (sRec.subjective_answer ? sRec.subjective_answer.length : 0),
-          submittedAt: sRec.submitted_at
-        });
+    // Determine deep points
+    if (hasDeepPayout) {
+      const dp = deepPayoutMap.get(sid);
+      payoutDate = dp.payoutDate;
+      for (const [acc, pts] of Object.entries(dp.pointsByAcc)) {
+        if (state.account === 'all' || acc === state.account) {
+          deepPointsByAccount[acc] = pts;
+        }
       }
     }
+
+    // Determine categoryStatus
+    if (hasSurvey) {
+      if (hasDeepPayout && Object.keys(deepPointsByAccount).length > 0) {
+        categoryStatus = 'deep_completed';
+      } else {
+        if (bDate <= todayStr) {
+          categoryStatus = 'deep_pending';
+        } else {
+          categoryStatus = 'upcoming';
+        }
+      }
+    } else {
+      if (isFreeSeminar) {
+        categoryStatus = bDate <= todayStr ? 'free_completed' : 'upcoming';
+      } else {
+        categoryStatus = bDate <= todayStr ? 'basic_completed' : 'upcoming';
+      }
+    }
+
+    const basicTotal = Object.values(basicPointsByAccount).reduce((a, b) => a + b, 0);
+    const deepTotal = Object.values(deepPointsByAccount).reduce((a, b) => a + b, 0);
+
+    daySems.set(sid, {
+      sid,
+      title,
+      eventDate: bDate,
+      timeRange,
+      payoutDate,
+      categoryStatus,
+      basicPointsByAccount,
+      deepPointsByAccount,
+      basicPointsTotal: basicTotal,
+      deepPointsTotal: deepTotal,
+      totalPoints: basicTotal + deepTotal,
+      surveyAnswers
+    });
   }
 
-  // 3. 방송 예정 세미나 마스터 결합
+  // 2. Also attach upcoming seminars from state.seminarsMaster if not in vodMaster
   for (const sMaster of (state.seminarsMaster || [])) {
     const mDate = sMaster.seminar_date || '';
     if (!mDate.startsWith(targetMonth)) continue;
     const sid = sMaster.seminar_id;
     if (!sid) continue;
 
-    // 이미 transactions(정산완료) 또는 surveyRecords(지급대기)로 등록된 세미나는 제외
-    let alreadyHandled = false;
-    for (const dSems of dateMap.values()) {
-      if (dSems.has(sid)) {
-        alreadyHandled = true;
-        break;
-      }
-    }
-    if (alreadyHandled) continue;
-
     if (!dateMap.has(mDate)) dateMap.set(mDate, new Map());
     const daySems = dateMap.get(mDate);
-    const mTitle = (sMaster.title && !sMaster.title.includes('만족도') && !sMaster.title.includes('양식 폼')) ? sMaster.title : (sid && SEMINAR_TITLES[sid] ? SEMINAR_TITLES[sid] : '라이브 세미나');
-    daySems.set(sid, {
-      sid: sid,
-      title: mTitle,
-      eventDate: mDate,
-      payoutDate: null,
-      timeRange: sMaster.time_range || '19:00 ~ 20:00',
-      pointsByAccount: {},
-      totalPoints: 0,
-      surveyAnswers: {},
-      isDeepSurvey: false,
-      isSettled: false,
-      status: sMaster.status || '방송 예정'
-    });
+    if (!daySems.has(sid)) {
+      daySems.set(sid, {
+        sid,
+        title: sMaster.title || '라이브 세미나',
+        eventDate: mDate,
+        timeRange: sMaster.time_range || '19:00 ~ 20:00',
+        payoutDate: null,
+        categoryStatus: 'upcoming',
+        basicPointsByAccount: {},
+        deepPointsByAccount: {},
+        basicPointsTotal: 0,
+        deepPointsTotal: 0,
+        totalPoints: 0,
+        surveyAnswers: {}
+      });
+    }
   }
 
   return dateMap;
@@ -1071,27 +993,46 @@ function renderSeminarArchive() {
   const targetMonth = state.selectedSeminarMonth || '2026-09';
   const dateMap = getAggregatedSeminarData(targetMonth);
 
-  // Compute monthly KPI
-  let totalSemCount = 0;
-  let totalSemPoints = 0;
-  let totalSurveysCount = 0;
+  // Compute 4-category monthly KPI
+  let deepCompletedCount = 0, deepCompletedPoints = 0;
+  let deepPendingCount = 0, deepPendingPoints = 0;
+  let basicCompletedCount = 0, basicCompletedPoints = 0;
+  let freeCompletedCount = 0, freeCompletedPoints = 0;
 
   for (const daySems of dateMap.values()) {
     for (const sem of daySems.values()) {
-      totalSemCount++;
-      totalSemPoints += sem.totalPoints;
-      for (const ansVal of Object.values(sem.surveyAnswers)) {
-        totalSurveysCount += Array.isArray(ansVal) ? ansVal.length : 1;
+      if (sem.categoryStatus === 'deep_completed') {
+        deepCompletedCount++;
+        deepCompletedPoints += sem.totalPoints;
+      } else if (sem.categoryStatus === 'deep_pending') {
+        deepPendingCount++;
+        deepPendingPoints += sem.basicPointsTotal;
+      } else if (sem.categoryStatus === 'basic_completed') {
+        basicCompletedCount++;
+        basicCompletedPoints += sem.basicPointsTotal;
+      } else if (sem.categoryStatus === 'free_completed') {
+        freeCompletedCount++;
       }
     }
   }
 
-  const kpiCountEl = document.getElementById('seminarKpiCount');
-  const kpiPointsEl = document.getElementById('seminarKpiPoints');
-  const kpiSurveysEl = document.getElementById('seminarKpiSurveys');
-  if (kpiCountEl) kpiCountEl.innerText = `${totalSemCount}건`;
-  if (kpiPointsEl) kpiPointsEl.innerText = `+${totalSemPoints.toLocaleString()} P`;
-  if (kpiSurveysEl) kpiSurveysEl.innerText = `${totalSurveysCount}건`;
+  const kpiDeepDoneCnt = document.getElementById('kpiDeepCompletedCount');
+  const kpiDeepDonePts = document.getElementById('kpiDeepCompletedPoints');
+  const kpiDeepPendCnt = document.getElementById('kpiDeepPendingCount');
+  const kpiDeepPendPts = document.getElementById('kpiDeepPendingPoints');
+  const kpiBasicDoneCnt = document.getElementById('kpiBasicCompletedCount');
+  const kpiBasicDonePts = document.getElementById('kpiBasicCompletedPoints');
+  const kpiFreeDoneCnt = document.getElementById('kpiFreeCompletedCount');
+  const kpiFreeDonePts = document.getElementById('kpiFreeCompletedPoints');
+
+  if (kpiDeepDoneCnt) kpiDeepDoneCnt.innerText = `${deepCompletedCount}건`;
+  if (kpiDeepDonePts) kpiDeepDonePts.innerText = `+${deepCompletedPoints.toLocaleString()} P`;
+  if (kpiDeepPendCnt) kpiDeepPendCnt.innerText = `${deepPendingCount}건`;
+  if (kpiDeepPendPts) kpiDeepPendPts.innerText = `+${deepPendingPoints.toLocaleString()} P`;
+  if (kpiBasicDoneCnt) kpiBasicDoneCnt.innerText = `${basicCompletedCount}건`;
+  if (kpiBasicDonePts) kpiBasicDonePts.innerText = `+${basicCompletedPoints.toLocaleString()} P`;
+  if (kpiFreeDoneCnt) kpiFreeDoneCnt.innerText = `${freeCompletedCount}건`;
+  if (kpiFreeDonePts) kpiFreeDonePts.innerText = `0 P`;
 
   // Sub-views visibility
   const calView = document.getElementById('seminarCalendarContainer');
@@ -1144,8 +1085,13 @@ function renderMonthlyCalendar(targetMonth, dateMap) {
 
     const dayStr = String(day).padStart(2, '0');
     const fullDate = `${targetMonth}-${dayStr}`;
-    const daySems = dateMap.get(fullDate);
-    const hasSems = daySems && daySems.size > 0;
+    const daySemsMap = dateMap.get(fullDate);
+    const allSems = daySemsMap ? Array.from(daySemsMap.values()) : [];
+    
+    // Multi-select Category Filter
+    const visibleSems = allSems.filter(sem => state.seminarFilters[sem.categoryStatus] !== false);
+    visibleSems.sort((a, b) => (a.timeRange || '').localeCompare(b.timeRange || ''));
+    const hasSems = visibleSems.length > 0;
     const isToday = fullDate === todayStr;
 
     const cell = document.createElement('div');
@@ -1161,32 +1107,40 @@ function renderMonthlyCalendar(targetMonth, dateMap) {
       isToday ? 'text-emerald-700 bg-emerald-100 px-1 rounded' : 'text-slate-600'
     }">${day}</span>`;
     if (hasSems) {
-      topHtml += `<span class="text-[9px] font-bold text-blue-600">${daySems.size}건</span>`;
+      topHtml += `<span class="text-[9px] font-bold text-blue-600">${visibleSems.length}건</span>`;
     }
     topHtml += `</div>`;
 
     let badgesHtml = '<div class="space-y-1 w-full">';
     if (hasSems) {
-      for (const sem of daySems.values()) {
+      for (const sem of visibleSems) {
         let ptsText = '';
         let badgeStyle = '';
-        if (sem.isSettled) {
+        if (sem.categoryStatus === 'deep_completed') {
           const kPts = Math.round(sem.totalPoints / 1000);
           ptsText = `${kPts}K`;
-          badgeStyle = 'bg-emerald-100 text-emerald-900 border border-emerald-300 shadow-2xs';
-        } else if (sem.status === '지급 예정') {
-          ptsText = '예정';
-          badgeStyle = 'bg-amber-100 text-amber-900 border border-amber-300 shadow-2xs';
+          badgeStyle = 'bg-emerald-500 text-white font-bold';
+        } else if (sem.categoryStatus === 'deep_pending') {
+          const kPts = Math.max(1, Math.round(sem.basicPointsTotal / 1000));
+          ptsText = `${kPts}K`;
+          badgeStyle = 'bg-amber-400 text-amber-950 font-bold';
+        } else if (sem.categoryStatus === 'basic_completed') {
+          const kPts = Math.max(1, Math.round(sem.basicPointsTotal / 1000));
+          ptsText = `${kPts}K`;
+          badgeStyle = 'bg-blue-500 text-white font-bold';
+        } else if (sem.categoryStatus === 'free_completed') {
+          ptsText = '0';
+          badgeStyle = 'bg-white text-slate-700 border border-slate-300 font-bold';
         } else {
           ptsText = '예정';
-          badgeStyle = 'bg-blue-100 text-blue-800 border border-blue-200';
+          badgeStyle = 'bg-slate-200 text-slate-600 font-bold';
         }
 
-        const sidText = sem.sid || findSeminarIdByTitle(sem.title) || '세미나';
+        const sidText = sem.sid || '세미나';
 
         badgesHtml += `
-          <div class="flex items-center gap-0.5 w-full text-[8.5px] font-bold leading-none" title="${sem.title}">
-            <span class="flex-1 py-0.5 rounded bg-slate-200 text-slate-800 font-mono text-center truncate">
+          <div class="flex items-center gap-0.5 w-full text-[8.5px] leading-none" title="${sem.title}">
+            <span class="flex-1 py-0.5 rounded bg-slate-100 text-slate-700 font-mono text-center truncate">
               ${sidText}
             </span>
             <span class="flex-1 py-0.5 rounded text-center truncate ${badgeStyle}">
@@ -1309,11 +1263,17 @@ function renderDailyTimeline(targetMonth, dateMap) {
   container.appendChild(actionToolbar);
 
   for (const dt of datesToShow) {
-    const daySems = dateMap.get(dt);
-    if (!daySems || daySems.size === 0) continue;
+    const daySemsMap = dateMap.get(dt);
+    if (!daySemsMap || daySemsMap.size === 0) continue;
+
+    const allSems = Array.from(daySemsMap.values());
+    const visibleSems = allSems.filter(sem => state.seminarFilters[sem.categoryStatus] !== false);
+    if (visibleSems.length === 0) continue;
+
+    visibleSems.sort((a, b) => (a.timeRange || '').localeCompare(b.timeRange || ''));
 
     let dayTotalPts = 0;
-    for (const s of daySems.values()) dayTotalPts += s.totalPoints;
+    for (const s of visibleSems) dayTotalPts += s.totalPoints;
 
     const dayCard = document.createElement('div');
     dayCard.className = "bg-white rounded-2xl p-4 card-shadow border border-slate-100 space-y-3";
@@ -1323,76 +1283,102 @@ function renderDailyTimeline(targetMonth, dateMap) {
         <div class="flex items-center gap-2">
           <span class="text-base">📅</span>
           <h4 class="text-xs font-bold text-slate-900">${dt}</h4>
-          <span class="text-[10px] text-slate-400">총 ${daySems.size}건</span>
+          <span class="text-[10px] text-slate-400">총 ${visibleSems.length}건</span>
         </div>
-        ${dayTotalPts > 0 ? `<span class="text-xs font-black text-emerald-600">+${dayTotalPts.toLocaleString()} P</span>` : '<span class="text-[10px] font-bold text-amber-700 bg-amber-50 px-2 py-0.5 rounded border border-amber-200">지급 대기 중</span>'}
+        ${dayTotalPts > 0 ? `<span class="text-xs font-black text-emerald-600">+${dayTotalPts.toLocaleString()} P</span>` : '<span class="text-[10px] font-bold text-amber-700 bg-amber-50 px-2 py-0.5 rounded border border-amber-200">정산 대기</span>'}
       </div>
     `;
 
     let itemsHtml = '<div class="space-y-3">';
-    for (const sem of daySems.values()) {
+    for (const sem of visibleSems) {
       const hasSurveyAnswers = Object.keys(sem.surveyAnswers).length > 0;
 
-      // 상단 상태 뱃지: 사람별(BJ / JH) 초록색/노란색 분리 표시 (지급 예정엔 포인트 미표기)
-      let badgesMarkup = '';
-      if (sem.isSettled) {
-        const entries = Object.entries(sem.pointsByAccount || {});
-        if (entries.length > 0) {
-          badgesMarkup = entries.map(([acc, pts]) => `
-            <span class="text-[10px] font-bold px-2 py-0.5 rounded-lg bg-emerald-100 text-emerald-900 border border-emerald-300 shadow-2xs">
-              +${pts.toLocaleString()}P (${formatAccountName(acc)})
-            </span>
-          `).join(' ');
-        } else {
-          badgesMarkup = `
-            <span class="text-[10px] font-bold px-2 py-0.5 rounded-lg bg-emerald-100 text-emerald-900 border border-emerald-300 shadow-2xs">
-              +${sem.totalPoints.toLocaleString()}P
-            </span>
-          `;
-        }
-      } else if (sem.status === '지급 예정') {
-        const pendingAccs = Object.keys(sem.pendingAccounts || {});
-        if (pendingAccs.length > 0) {
-          badgesMarkup = pendingAccs.map(acc => `
-            <span class="text-[10px] font-bold px-2 py-0.5 rounded-lg bg-amber-100 text-amber-900 border border-amber-300 shadow-2xs">
-              ⏳ 지급 예정 (${formatAccountName(acc)})
-            </span>
-          `).join(' ');
-        } else {
-          badgesMarkup = `
-            <span class="text-[10px] font-bold px-2 py-0.5 rounded-lg bg-amber-100 text-amber-900 border border-amber-300 shadow-2xs">
-              ⏳ 지급 예정
-            </span>
-          `;
-        }
+      // Status Badge
+      let statusBadge = '';
+      if (sem.categoryStatus === 'deep_completed') {
+        statusBadge = '<span class="text-[10px] font-bold px-2 py-0.5 rounded-lg bg-emerald-100 text-emerald-900 border border-emerald-300 shadow-2xs">🟢 심화완료</span>';
+      } else if (sem.categoryStatus === 'deep_pending') {
+        statusBadge = '<span class="text-[10px] font-bold px-2 py-0.5 rounded-lg bg-amber-100 text-amber-900 border border-amber-300 shadow-2xs">🟡 심화대기</span>';
+      } else if (sem.categoryStatus === 'basic_completed') {
+        statusBadge = '<span class="text-[10px] font-bold px-2 py-0.5 rounded-lg bg-blue-100 text-blue-900 border border-blue-300 shadow-2xs">🔵 기본완료</span>';
+      } else if (sem.categoryStatus === 'free_completed') {
+        statusBadge = '<span class="text-[10px] font-bold px-2 py-0.5 rounded-lg bg-slate-100 text-slate-700 border border-slate-300 shadow-2xs">⚪ 무료완료</span>';
       } else {
-        badgesMarkup = `
-          <span class="text-[10px] font-bold px-2 py-0.5 rounded-lg bg-blue-100 text-blue-800 border border-blue-200">
-            🔵 방송 예정
+        statusBadge = '<span class="text-[10px] font-bold px-2 py-0.5 rounded-lg bg-slate-100 text-slate-500 border border-slate-200">⚪ 방송예정</span>';
+      }
+
+      // Line 1: Basic points buttons (진행일)
+      let basicBtns = '';
+      const basicEntries = Object.entries(sem.basicPointsByAccount || {});
+      if (basicEntries.length > 0) {
+        basicBtns = basicEntries.map(([acc, pts]) => `
+          <span class="text-[9.5px] font-bold px-1.5 py-0.5 rounded bg-blue-100 text-blue-900 border border-blue-200 shadow-2xs">
+            +${pts.toLocaleString()}P (${formatAccountName(acc)})
           </span>
+        `).join(' ');
+      } else if (sem.categoryStatus !== 'free_completed' && sem.categoryStatus !== 'upcoming') {
+        basicBtns = `<span class="text-[9.5px] font-bold px-1.5 py-0.5 rounded bg-blue-100 text-blue-900 border border-blue-200 shadow-2xs">+1,000P</span>`;
+      }
+
+      // Line 2: Deep points buttons (입금일)
+      let deepLine = '';
+      if (sem.categoryStatus === 'deep_completed') {
+        const deepEntries = Object.entries(sem.deepPointsByAccount || {});
+        const deepBtns = deepEntries.map(([acc, pts]) => `
+          <span class="text-[9.5px] font-bold px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-900 border border-emerald-300 shadow-2xs">
+            +${pts.toLocaleString()}P (${formatAccountName(acc)})
+          </span>
+        `).join(' ');
+        deepLine = `
+          <div class="flex items-center gap-2 text-[10px] text-slate-600 flex-wrap">
+            <span class="font-semibold text-emerald-700">💰 <strong>입금일</strong>: ${sem.payoutDate || '-'}</span>
+            <div class="flex items-center gap-1 flex-wrap">${deepBtns}</div>
+          </div>
+        `;
+      } else if (sem.categoryStatus === 'deep_pending') {
+        const accounts = Object.keys(sem.surveyAnswers || {});
+        const pendingBtns = (accounts.length > 0 ? accounts : (state.account === 'all' ? ['박범준', '박주하'] : [state.account])).map(acc => `
+          <span class="text-[9.5px] font-bold px-1.5 py-0.5 rounded bg-amber-100 text-amber-900 border border-amber-300 shadow-2xs">
+            대기 (${formatAccountName(acc)})
+          </span>
+        `).join(' ');
+        deepLine = `
+          <div class="flex items-center gap-2 text-[10px] text-slate-600 flex-wrap">
+            <span class="font-semibold text-amber-700">💰 <strong>입금일</strong>: 대기</span>
+            <div class="flex items-center gap-1 flex-wrap">${pendingBtns}</div>
+          </div>
+        `;
+      } else if (sem.categoryStatus === 'basic_completed') {
+        deepLine = `
+          <div class="flex items-center gap-2 text-[10px] text-slate-400">
+            <span>💰 <strong>입금일</strong>: -</span>
+          </div>
+        `;
+      } else if (sem.categoryStatus === 'free_completed') {
+        deepLine = `
+          <div class="flex items-center gap-2 text-[10px] text-slate-400">
+            <span>💰 <strong>입금일</strong>: - (포인트 없음)</span>
+          </div>
         `;
       }
 
       itemsHtml += `
         <div class="bg-slate-50/70 p-3 rounded-xl border border-slate-200/70 space-y-2">
-          <div class="flex items-start justify-between gap-2">
-            <div class="min-w-0 flex-1">
-              <div class="flex flex-wrap items-center gap-1.5 mb-1.5">
-                ${(sem.sid || findSeminarIdByTitle(sem.title)) ? `<span class="text-[10px] font-bold font-mono px-1.5 py-0.5 rounded bg-slate-200 text-slate-700">ID: ${sem.sid || findSeminarIdByTitle(sem.title)}</span>` : ''}
-                ${badgesMarkup}
-              </div>
-              <h5 class="text-xs font-bold text-slate-800 leading-snug break-keep">${cleanSeminarTitle(sem.title)}</h5>
-            </div>
+          <!-- Header: ID -> Time Range -> Status Badge -->
+          <div class="flex flex-wrap items-center gap-2 pb-1.5 border-b border-slate-200/50">
+            ${sem.sid ? `<span class="text-[10px] font-bold font-mono px-1.5 py-0.5 rounded bg-slate-200 text-slate-700">ID: ${sem.sid}</span>` : ''}
+            ${sem.timeRange ? `<span class="text-[10.5px] font-bold text-slate-600">⏰ ${sem.timeRange}</span>` : ''}
+            ${statusBadge}
           </div>
+          <h5 class="text-xs font-bold text-slate-800 leading-snug break-keep">${cleanSeminarTitle(sem.title)}</h5>
 
-          <!-- 일정 및 정산 상세 정보 (진행일 및 입금일만 깔끔하게 유지) -->
-          <div class="flex items-center gap-x-3 text-[10px] text-slate-500 pt-1 border-t border-slate-200/50">
-            <span>📅 <strong>진행일</strong>: ${sem.eventDate}</span>
-            ${sem.isSettled ? `
-              <span class="text-emerald-700 font-semibold">💰 <strong>입금일</strong>: ${sem.payoutDate}</span>
-            ` : `
-              <span class="text-amber-700 font-semibold">💰 <strong>입금일</strong>: 지급예정</span>
-            `}
+          <!-- 일정 및 포인트 영역 (줄바꿈 분리) -->
+          <div class="space-y-1.5 pt-1">
+            <div class="flex items-center gap-2 text-[10px] text-slate-600 flex-wrap">
+              <span>📅 <strong>진행일</strong>: ${sem.eventDate}</span>
+              ${basicBtns ? `<div class="flex items-center gap-1 flex-wrap">${basicBtns}</div>` : ''}
+            </div>
+            ${deepLine}
           </div>
 
           ${hasSurveyAnswers ? `
@@ -1915,24 +1901,34 @@ export function setupEventHandlers() {
     });
   }
 
-  // Seminar Filter: 1,000P General Survey Toggle (심화설문만 vs 전체)
-  const filterDeepBtn = document.getElementById('filterDeepOnlyBtn');
-  const filterAllBtn = document.getElementById('filterAllSurveysBtn');
-  if (filterDeepBtn && filterAllBtn) {
-    filterDeepBtn.addEventListener('click', () => {
-      state.hideRegularSurveys = true;
-      filterDeepBtn.className = "px-2.5 py-1 text-[11px] font-bold rounded-md bg-white text-blue-600 shadow-xs transition-all flex items-center gap-1";
-      filterAllBtn.className = "px-2.5 py-1 text-[11px] font-medium rounded-md text-slate-500 hover:text-slate-800 transition-all flex items-center gap-1";
-      renderSeminarArchive();
-    });
+  // Seminar Filter: Multi-Select Category Filters (심화완료, 심화대기, 기본완료, 무료완료)
+  const filterBtns = document.querySelectorAll('#seminarFilterGroup .filter-toggle-btn');
+  filterBtns.forEach(btn => {
+    btn.addEventListener('click', () => {
+      const key = btn.dataset.filter;
+      if (!key) return;
+      state.seminarFilters[key] = !state.seminarFilters[key];
 
-    filterAllBtn.addEventListener('click', () => {
-      state.hideRegularSurveys = false;
-      filterAllBtn.className = "px-2.5 py-1 text-[11px] font-bold rounded-md bg-white text-blue-600 shadow-xs transition-all flex items-center gap-1";
-      filterDeepBtn.className = "px-2.5 py-1 text-[11px] font-medium rounded-md text-slate-500 hover:text-slate-800 transition-all flex items-center gap-1";
+      const isActive = state.seminarFilters[key];
+      if (isActive) {
+        btn.classList.add('active');
+        if (key === 'deep_completed') {
+          btn.className = "filter-toggle-btn active px-2.5 py-1 text-[11px] font-bold rounded-lg border border-emerald-400 bg-emerald-500 text-white transition-all cursor-pointer shadow-2xs";
+        } else if (key === 'deep_pending') {
+          btn.className = "filter-toggle-btn active px-2.5 py-1 text-[11px] font-bold rounded-lg border border-amber-400 bg-amber-500 text-white transition-all cursor-pointer shadow-2xs";
+        } else if (key === 'basic_completed') {
+          btn.className = "filter-toggle-btn active px-2.5 py-1 text-[11px] font-bold rounded-lg border border-blue-400 bg-blue-500 text-white transition-all cursor-pointer shadow-2xs";
+        } else if (key === 'free_completed') {
+          btn.className = "filter-toggle-btn active px-2.5 py-1 text-[11px] font-bold rounded-lg border border-slate-300 bg-slate-200 text-slate-800 transition-all cursor-pointer shadow-2xs";
+        }
+      } else {
+        btn.classList.remove('active');
+        btn.className = "filter-toggle-btn px-2.5 py-1 text-[11px] font-medium rounded-lg border border-slate-200 bg-white text-slate-400 opacity-60 transition-all cursor-pointer shadow-2xs";
+      }
+
       renderSeminarArchive();
     });
-  }
+  });
 
   // Toggle All Subjective Answers (전체 답변 접기 / 펼치기)
   const btnToggleAll = document.getElementById('btnToggleAllAnswers');
