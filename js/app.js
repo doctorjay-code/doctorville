@@ -843,25 +843,35 @@ function getAggregatedSeminarData(targetMonth) {
   for (const sMaster of (state.seminarsMaster || [])) {
     const mDate = sMaster.seminar_date || '';
     if (!mDate.startsWith(targetMonth)) continue;
+    const sid = sMaster.seminar_id;
+    if (!sid) continue;
+
+    // 이미 transactions(정산완료) 또는 surveyRecords(지급대기)로 등록된 세미나는 제외
+    let alreadyHandled = false;
+    for (const dSems of dateMap.values()) {
+      if (dSems.has(sid)) {
+        alreadyHandled = true;
+        break;
+      }
+    }
+    if (alreadyHandled) continue;
+
     if (!dateMap.has(mDate)) dateMap.set(mDate, new Map());
     const daySems = dateMap.get(mDate);
-    const sid = sMaster.seminar_id;
-    if (sid && !daySems.has(sid)) {
-      const mTitle = (sMaster.title && !sMaster.title.includes('만족도') && !sMaster.title.includes('양식 폼')) ? sMaster.title : (sid && SEMINAR_TITLES[sid] ? SEMINAR_TITLES[sid] : '라이브 세미나');
-      daySems.set(sid, {
-        sid: sid,
-        title: mTitle,
-        eventDate: mDate,
-        payoutDate: null,
-        timeRange: sMaster.time_range || '19:00 ~ 20:00',
-        pointsByAccount: {},
-        totalPoints: 0,
-        surveyAnswers: {},
-        isDeepSurvey: false,
-        isSettled: false,
-        status: sMaster.status || '방송 예정'
-      });
-    }
+    const mTitle = (sMaster.title && !sMaster.title.includes('만족도') && !sMaster.title.includes('양식 폼')) ? sMaster.title : (sid && SEMINAR_TITLES[sid] ? SEMINAR_TITLES[sid] : '라이브 세미나');
+    daySems.set(sid, {
+      sid: sid,
+      title: mTitle,
+      eventDate: mDate,
+      payoutDate: null,
+      timeRange: sMaster.time_range || '19:00 ~ 20:00',
+      pointsByAccount: {},
+      totalPoints: 0,
+      surveyAnswers: {},
+      isDeepSurvey: false,
+      isSettled: false,
+      status: sMaster.status || '방송 예정'
+    });
   }
 
   return dateMap;
@@ -977,7 +987,7 @@ function renderMonthlyCalendar(targetMonth, dateMap) {
         } else if (sem.status === '지급 예정') {
           ptsBadge = `<span class="px-1 py-0.2 rounded font-bold text-[8.5px] leading-tight shrink-0 shadow-2xs bg-amber-100 text-amber-900 border border-amber-300">⏳지급예정</span>`;
         } else {
-          ptsBadge = `<span class="px-1 py-0.2 rounded font-bold text-[8.5px] leading-tight shrink-0 bg-blue-100 text-blue-800 border border-blue-200">🔵예정</span>`;
+          ptsBadge = `<span class="px-1 py-0.2 rounded font-bold text-[8.5px] leading-tight shrink-0 bg-blue-100 text-blue-800 border border-blue-200">🔵${sem.status || '예정'}</span>`;
         }
 
         badgesHtml += `
